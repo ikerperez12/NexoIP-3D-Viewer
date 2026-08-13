@@ -7,6 +7,7 @@ import { isPathInside, isSupportedModelPath } from './security.js';
 const MAX_CONFIG_BYTES = 16 * 1024;
 const MAX_ASSET_PROBE_BYTES = 64 * 1024;
 const TEMP_CONFIG_PATTERN = /^nexoip-packaged-self-test-[a-f0-9]+\.json$/;
+const TEMP_RESULT_PATTERN = /^result-[a-f0-9]+\.json$/;
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -19,11 +20,18 @@ function isPlainObject(value) {
 }
 
 async function readBoundedUtf8(filePath) {
-  const stats = await fs.promises.stat(filePath);
-  if (!stats.isFile() || stats.size > MAX_CONFIG_BYTES) {
-    throw new Error('The packaged self-test configuration is invalid.');
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) throw new Error('The packaged self-test configuration is invalid.');
+
+    const buffer = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_CONFIG_BYTES) throw new Error('The packaged self-test configuration is invalid.');
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    await handle.close();
   }
-  return fs.promises.readFile(filePath, 'utf8');
 }
 
 async function canonicalTemporaryConfigPath(configPath) {
@@ -41,7 +49,7 @@ async function canonicalTemporaryConfigPath(configPath) {
   return realConfigPath;
 }
 
-function validateConfig(config, configPath, expectedDigest) {
+async function validateConfig(config, configPath, expectedDigest) {
   if (!isPlainObject(config)
     || config.version !== 1
     || typeof config.token !== 'string'
@@ -51,7 +59,13 @@ function validateConfig(config, configPath, expectedDigest) {
     || !path.isAbsolute(config.fixturePath)
     || !path.isAbsolute(config.resultPath)
     || !isSupportedModelPath(config.fixturePath)
-    || !isPathInside(path.dirname(configPath), path.resolve(config.resultPath))) {
+    || !TEMP_RESULT_PATTERN.test(path.basename(config.resultPath))) {
+    throw new Error('The packaged self-test configuration is invalid.');
+  }
+
+  const configDirectory = await fs.promises.realpath(path.dirname(configPath));
+  const resultDirectory = await fs.promises.realpath(path.dirname(config.resultPath));
+  if (path.relative(configDirectory, resultDirectory) !== '') {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
@@ -63,7 +77,7 @@ function validateConfig(config, configPath, expectedDigest) {
 
   return {
     fixturePath: path.resolve(config.fixturePath),
-    resultPath: path.resolve(config.resultPath),
+    resultPath: path.join(resultDirectory, path.basename(config.resultPath)),
   };
 }
 

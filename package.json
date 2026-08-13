@@ -125,6 +125,7 @@
       ]
     },
     "nsis": {
+      "guid": "195abf82-5ba1-59b2-940c-d7f53e2f3f74",
       "artifactName": "NexoIP-3D-Viewer-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
       "perMachine": false,

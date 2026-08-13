@@ -17,7 +17,6 @@ const UNINSTALLER_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 15_000;
 const MAX_CAPTURED_OUTPUT_BYTES = 128 * 1024;
 const POLL_INTERVAL_MS = 100;
-const ELECTRON_BUILDER_UUID_NAMESPACE = '50e065bc-3134-11e6-9bab-38c9862bdaf3';
 
 const diagnosticEvents = [];
 
@@ -60,6 +59,8 @@ function readReleaseMetadata() {
     'package.json must declare build.productName.');
   assert(typeof build?.nsis?.artifactName === 'string' && typeof build?.portable?.artifactName === 'string',
     'package.json must declare explicit NSIS and portable artifact names.');
+  assert(typeof build.nsis.guid === 'string' && /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(build.nsis.guid),
+    'package.json must declare the stable NSIS uninstall guid.');
 
   const installerArtifact = build.nsis.artifactName
     .replace('${version}', packageMetadata.version)
@@ -300,23 +301,8 @@ async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDir
   }
 }
 
-function uuidToBytes(uuid) {
-  assert(/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(uuid), `Invalid UUID: ${uuid}`);
-  return Buffer.from(uuid.replaceAll('-', ''), 'hex');
-}
-
-function uuidV5(name, namespace) {
-  const hash = createHash('sha1').update(uuidToBytes(namespace)).update(name, 'utf8').digest();
-  hash[6] = (hash[6] & 0x0f) | 0x50;
-  hash[8] = (hash[8] & 0x3f) | 0x80;
-  const hexadecimal = hash.subarray(0, 16).toString('hex');
-  return `${hexadecimal.slice(0, 8)}-${hexadecimal.slice(8, 12)}-${hexadecimal.slice(12, 16)}-${hexadecimal.slice(16, 20)}-${hexadecimal.slice(20)}`;
-}
-
 function getNsisUninstallRegistryKey(metadata) {
-  const guid = metadata.nsisGuid || uuidV5(metadata.appId, ELECTRON_BUILDER_UUID_NAMESPACE);
-  assert(/^[a-f\d-]{36}$/i.test(guid), 'NSIS guid must be a UUID.');
-  return `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${guid}`;
+  return `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${metadata.nsisGuid}`;
 }
 
 function registryKeyExists(rootKey, registryPath) {

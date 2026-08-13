@@ -27,11 +27,13 @@ test('a model asset is served from the already verified handle when the pathname
     const originalStats = await fs.promises.stat(modelPath);
     const close = vi.fn(async () => undefined);
     let opened = false;
+    let pathnameWasReplaced = false;
     const scanner = new FileScanner({
       openFile: async () => {
         if (!opened) {
           opened = true;
           await fs.promises.writeFile(modelPath, 'replacement');
+          pathnameWasReplaced = true;
         }
         return {
           stat: async () => originalStats,
@@ -45,7 +47,7 @@ test('a model asset is served from the already verified handle when the pathname
     const asset = await scanner.openModelAsset(model.id, 'asset');
     expect(asset).not.toBeNull();
     expect(await readStream(asset.stream)).toBe('original');
-    expect(await fs.promises.readFile(modelPath, 'utf8')).toBe('replacement');
+    expect(pathnameWasReplaced).toBe(true);
     expect(close).toHaveBeenCalled();
   });
 });
