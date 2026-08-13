@@ -1,0 +1,61 @@
+{
+  "name": "nexoip-3d-viewer",
+  "private": false,
+  "version": "1.0.0",
+  "description": "Visor 3D nativo de escritorio y escáner masivo de archivos para Windows (.GLB, .GLTF, .OBJ, .STL, .FBX, .PLY, .DAE)",
+  "author": "NexoIP",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "homepage": "./",
+  "scripts": {
+    "dev": "concurrently \"node server/index.js\" \"node node_modules/vite/bin/vite.js\"",
+    "build": "node node_modules/vite/bin/vite.js build",
+    "preview": "node node_modules/vite/bin/vite.js preview",
+    "server": "node server/index.js",
+    "electron": "concurrently \"node server/index.js\" \"node node_modules/vite/bin/vite.js\" \"electron .\"",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.nexoip.viewer3d",
+    "productName": "NexoIP 3D Viewer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "concurrently": "^8.2.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "fast-glob": "^3.3.3",
+    "lucide-react": "^0.395.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.165.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.165.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.2.13"
+  }
+}

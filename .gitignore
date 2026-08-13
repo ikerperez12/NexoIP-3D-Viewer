@@ -1,0 +1,29 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Archivos de Compilación
+dist/
+dist-electron/
+out/
+release/
+build/
+
+# Archivos de Entorno y Secretos
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Sistema Operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Modelos temporales de prueba
+demo_models/

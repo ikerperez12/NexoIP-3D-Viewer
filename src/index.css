@@ -1,0 +1,85 @@
+/* NexoIP 3D Viewer - Paleta Multicolor Premium estilo Studio/Blender */
+
+:root {
+  --bg-primary: #000000;
+  --bg-surface: #121620;
+  --bg-glass: rgba(18, 22, 30, 0.88);
+  --border-color: rgba(255, 255, 255, 0.12);
+  --border-active: rgba(245, 158, 11, 0.6);
+  --accent-amber: #f59e0b;
+  --accent-emerald: #10b981;
+  --accent-cyan: #06b6d4;
+  --accent-rose: #f43f5e;
+  --accent-purple: #a855f7;
+  --text-main: #f9fafb;
+  --text-muted: #9ca3af;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+body, html, #root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+}
+
+/* Scrollbars Oscuras con Acento Ámbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 158, 11, 0.6);
+}
+
+/* Paneles Glassmorphic Estilo Estudio Pro */
+.glass-panel {
+  background: var(--bg-glass) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: 0 16px 48px 0 rgba(0, 0, 0, 0.75) !important;
+}
+
+/* Badges Multicolor para Extensiones 3D */
+.badge-glb, .badge-gltf { background: rgba(16, 185, 129, 0.25) !important; color: #34d399 !important; border: 1px solid rgba(16, 185, 129, 0.4) !important; }
+.badge-obj { background: rgba(244, 63, 94, 0.25) !important; color: #fb7185 !important; border: 1px solid rgba(244, 63, 94, 0.4) !important; }
+.badge-stl { background: rgba(245, 158, 11, 0.25) !important; color: #fbbf24 !important; border: 1px solid rgba(245, 158, 11, 0.4) !important; }
+.badge-fbx { background: rgba(168, 85, 247, 0.25) !important; color: #c084fc !important; border: 1px solid rgba(168, 85, 247, 0.4) !important; }
+.badge-ply { background: rgba(6, 182, 212, 0.25) !important; color: #38bdf8 !important; border: 1px solid rgba(6, 182, 212, 0.4) !important; }
+.badge-dae { background: rgba(236, 72, 153, 0.25) !important; color: #f472b6 !important; border: 1px solid rgba(236, 72, 153, 0.4) !important; }
+
+/* Animaciones */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
