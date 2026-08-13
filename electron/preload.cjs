@@ -50,6 +50,10 @@ const nexoip = Object.freeze({
     return ipcRenderer.invoke('nexoip:scan');
   },
 
+  cancelScan() {
+    return ipcRenderer.invoke('nexoip:cancel-scan');
+  },
+
   getScanStatus() {
     return ipcRenderer.invoke('nexoip:get-scan-status');
   },

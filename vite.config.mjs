@@ -11,8 +11,23 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         {
-          src: 'node_modules/three/examples/jsm/libs/draco/*',
+          src: 'node_modules/three/examples/jsm/libs/draco/draco_decoder.wasm',
           dest: 'draco',
+          rename: { stripBase: true }
+        },
+        {
+          src: 'node_modules/three/examples/jsm/libs/draco/draco_wasm_wrapper.js',
+          dest: 'draco',
+          rename: { stripBase: true }
+        },
+        {
+          src: 'node_modules/three/examples/jsm/libs/basis/basis_transcoder.js',
+          dest: 'basis',
+          rename: { stripBase: true }
+        },
+        {
+          src: 'node_modules/three/examples/jsm/libs/basis/basis_transcoder.wasm',
+          dest: 'basis',
           rename: { stripBase: true }
         }
       ]

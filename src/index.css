@@ -32,11 +32,26 @@ button, select, [role="button"] {
   user-select: none;
 }
 
+button,
+select {
+  min-height: 32px;
+}
+
+button {
+  min-width: 32px;
+}
+
+input[type="range"] {
+  min-height: 32px;
+}
+
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
   outline: 3px solid var(--accent-amber);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
 body, html, #root {
@@ -107,5 +122,55 @@ body, html, #root {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --bg-glass: #000000;
+    --border-color: rgba(255, 255, 255, 0.85);
+    --text-muted: #e5e7eb;
+  }
+
+  .glass-panel {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  button,
+  select,
+  input {
+    border-color: rgba(255, 255, 255, 0.85) !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --bg-primary: Canvas;
+    --text-main: CanvasText;
+    --text-muted: CanvasText;
+  }
+
+  .glass-panel {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  button,
+  select,
+  input {
+    background: ButtonFace !important;
+    color: ButtonText !important;
+    border: 1px solid ButtonText !important;
+    forced-color-adjust: auto;
+  }
+
+  button[aria-pressed="true"],
+  button[aria-selected="true"] {
+    outline: 2px solid Highlight !important;
+    outline-offset: -3px;
   }
 }

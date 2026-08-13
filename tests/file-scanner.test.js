@@ -62,10 +62,28 @@ test('dropped models are registered by explicit path and sidecars remain contain
     const scanner = new FileScanner();
     const model = await scanner.registerDroppedPath(modelPath);
     expect(scanner.getModelPath(model.id)).toBe(await fs.promises.realpath(modelPath));
-    expect(await scanner.resolveModelAsset(model.id, 'asset')).toBe(await fs.promises.realpath(modelPath));
-    expect(await scanner.resolveModelAsset(model.id, 'textures/base-color.png')).toBe(await fs.promises.realpath(sidecarPath));
+    expect((await scanner.resolveModelAsset(model.id, 'asset')).toString()).toBe('{}');
+    expect((await scanner.resolveModelAsset(model.id, 'textures/base-color.png')).toString()).toBe('png');
     expect(await scanner.resolveModelAsset(model.id, '../outside.png')).toBeNull();
     expect(await scanner.resolveModelAsset(model.id, 'textures/base-color.svg')).toBeNull();
+  });
+});
+
+test('OBJ material sidecars are allowed but executable or document sidecars are denied', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const modelPath = path.join(directory, 'mesh.obj');
+    const materialPath = path.join(directory, 'mesh.mtl');
+    const deniedPath = path.join(directory, 'notes.txt');
+    await Promise.all([
+      fs.promises.writeFile(modelPath, 'mtllib mesh.mtl\nv 0 0 0\n'),
+      fs.promises.writeFile(materialPath, 'newmtl Safe\nKd 1 1 1\n'),
+      fs.promises.writeFile(deniedPath, 'private notes'),
+    ]);
+
+    const scanner = new FileScanner();
+    const model = await scanner.registerDroppedPath(modelPath);
+    expect((await scanner.resolveModelAsset(model.id, 'mesh.mtl')).toString()).toContain('newmtl Safe');
+    expect(await scanner.resolveModelAsset(model.id, 'notes.txt')).toBeNull();
   });
 });
 

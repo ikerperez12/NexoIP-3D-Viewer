@@ -13,10 +13,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-release-source:
+    name: Verify protected main release source
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag and exact default-branch commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $expectedTag = "v$($package.version)"
+          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must exactly match package version '$expectedTag'."
+          }
+          if ($package.version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Package version '$($package.version)' is not valid SemVer."
+          }
+
+          $repository = gh api repos/$env:GITHUB_REPOSITORY | ConvertFrom-Json
+          $defaultBranch = [string]$repository.default_branch
+          if ($defaultBranch -cne 'main') { throw "Releases require protected main; repository default branch is '$defaultBranch'." }
+          $mainBranch = gh api "repos/$env:GITHUB_REPOSITORY/branches/$defaultBranch" | ConvertFrom-Json
+          if (-not $mainBranch.protected) {
+            throw "Default branch '$defaultBranch' must be protected before a release can access production-signing."
+          }
+
+          git fetch --no-tags origin $defaultBranch
+          $tagCommit = (git rev-list -n 1 $env:GITHUB_REF).Trim()
+          $mainCommit = (git rev-parse "origin/$defaultBranch^{commit}").Trim()
+          if ($tagCommit -cne $mainCommit) {
+            throw "Release tag commit $tagCommit is not the protected $defaultBranch tip $mainCommit."
+          }
+          "Release source verified: $tagCommit is the exact protected $defaultBranch tip." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
   build:
     name: Build and verify Windows artifacts
+    needs: verify-release-source
     runs-on: windows-latest
     timeout-minutes: 45
+    environment: production-signing
 
     steps:
       - name: Check out repository without stored credentials
@@ -33,18 +78,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Verify release tag matches package version
-        shell: pwsh
-        run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $expectedTag = "v$version"
-          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
-            throw "Release tag '$env:GITHUB_REF_NAME' must exactly match package version '$expectedTag'."
-          }
-          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') {
-            throw "Package version '$version' is not valid SemVer."
-          }
-
       - name: Run quality gates
         run: npm run check
 
@@ -54,25 +87,119 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
 
+      - name: Download and verify the official Electron runtime baseline
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $electronVersion = [string]$package.devDependencies.electron
+          if ($electronVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Electron runtime version '$electronVersion' must be exact SemVer."
+          }
+          $artifactName = "electron-v$electronVersion-win32-x64.zip"
+          $releaseBase = "https://github.com/electron/electron/releases/download/v$electronVersion"
+          $checksums = [System.Text.Encoding]::UTF8.GetString((Invoke-WebRequest -UseBasicParsing "$releaseBase/SHASUMS256.txt").Content)
+          $checksumLine = $checksums -split "`n" | Where-Object { $_ -match "^([a-f0-9]{64})\s+\*?$([regex]::Escape($artifactName))\s*$" }
+          if (@($checksumLine).Count -ne 1) { throw "Official SHA-256 entry for $artifactName was not found." }
+          $expectedHash = ([regex]::Match($checksumLine.Trim(), '^[a-f0-9]{64}')).Value
+          $verificationDirectory = Join-Path $env:RUNNER_TEMP ("nexoip-electron-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $verificationDirectory | Out-Null
+          $runtimeArchive = Join-Path $verificationDirectory $artifactName
+          $referenceDirectory = Join-Path $verificationDirectory 'reference'
+          Invoke-WebRequest -UseBasicParsing "$releaseBase/$artifactName" -OutFile $runtimeArchive
+          $actualHash = (Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -cne $expectedHash) { throw "Official Electron archive hash mismatch for $artifactName." }
+          Expand-Archive -LiteralPath $runtimeArchive -DestinationPath $referenceDirectory -Force
+          if (-not (Test-Path (Join-Path $referenceDirectory 'electron.exe') -PathType Leaf)) {
+            throw 'The verified Electron archive did not contain electron.exe at its expected root.'
+          }
+          "ELECTRON_REFERENCE_DIR=$referenceDirectory" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Verified official Electron runtime archive $artifactName with SHA-256 $actualHash." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Smoke test packaged application
         run: npm run test:smoke:run
+
+      - name: Exercise installer, uninstall, and portable artifacts
+        run: npm run test:release-artifacts
 
       - name: Stage third-party notices
         shell: pwsh
         run: Copy-Item -LiteralPath THIRD_PARTY_NOTICES.txt -Destination release/THIRD_PARTY_NOTICES.txt
 
-      - name: Record signing status
+      - name: Verify NexoIP signatures and official Electron runtime PE integrity
         shell: pwsh
+        env:
+          NEXOIP_SIGNING_SUBJECT: ${{ vars.NEXOIP_SIGNING_SUBJECT }}
         run: |
-          $executables = @(Get-ChildItem release -File -Filter '*.exe')
-          if ($executables.Count -lt 2) { throw 'Expected installer and portable executables.' }
-          foreach ($file in $executables) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            "- $($file.Name): Authenticode $($signature.Status)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            if ($signature.Status -notin @('Valid', 'NotSigned')) {
-              throw "Invalid signature status for $($file.Name): $($signature.Status)"
+          $expectedSubject = [string]$env:NEXOIP_SIGNING_SUBJECT
+          if ([string]::IsNullOrWhiteSpace($expectedSubject)) {
+            throw 'production-signing must define the NEXOIP_SIGNING_SUBJECT environment variable.'
+          }
+
+          function Test-PortableExecutable([System.IO.FileInfo]$file) {
+            $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            try {
+              return $stream.ReadByte() -eq 0x4D -and $stream.ReadByte() -eq 0x5A
+            } finally {
+              $stream.Dispose()
             }
           }
+
+          $releaseExecutables = @(Get-ChildItem release -File -Filter '*.exe')
+          if ($releaseExecutables.Count -lt 2) { throw 'Expected installer and portable executables.' }
+          $publisherOwnedExecutables = @($releaseExecutables) + @(Get-ChildItem release/win-unpacked -File -Filter 'NexoIP 3D Viewer.exe')
+          if ($publisherOwnedExecutables.Count -ne 3) { throw 'Expected the installer, portable executable, and unpacked application executable.' }
+
+          foreach ($file in $publisherOwnedExecutables) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            $subject = $signature.SignerCertificate.Subject
+            if ($signature.Status -cne 'Valid') {
+              throw "NexoIP executable $($file.FullName) must be Authenticode Valid, but is $($signature.Status)."
+            }
+            if ($subject -cne $expectedSubject) {
+              throw "Unexpected Authenticode subject for $($file.FullName). Expected '$expectedSubject', got '$subject'."
+            }
+            if (-not $signature.TimeStamperCertificate) {
+              throw "NexoIP executable $($file.FullName) is missing a trusted Authenticode timestamp."
+            }
+            "- NexoIP $($file.Name): Authenticode Valid; subject $subject; timestamp $($signature.TimeStamperCertificate.Subject)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+          $runtimeDirectory = (Resolve-Path release/win-unpacked).Path
+          $referenceDirectory = (Resolve-Path $env:ELECTRON_REFERENCE_DIR).Path
+          $electronVersion = [string]((Get-Content package.json -Raw | ConvertFrom-Json).devDependencies.electron)
+          $runtimePortableExecutables = @(Get-ChildItem $runtimeDirectory -Recurse -File | Where-Object {
+            $_.FullName -cne (Join-Path $runtimeDirectory 'NexoIP 3D Viewer.exe') -and (Test-PortableExecutable $_)
+          })
+          $referencePortableExecutables = @(Get-ChildItem $referenceDirectory -Recurse -File | Where-Object {
+            $_.FullName -cne (Join-Path $referenceDirectory 'electron.exe') -and (Test-PortableExecutable $_)
+          })
+          if ($runtimePortableExecutables.Count -ne $referencePortableExecutables.Count) {
+            throw "Packaged Electron runtime PE count $($runtimePortableExecutables.Count) does not match official baseline $($referencePortableExecutables.Count)."
+          }
+
+          $inventory = @()
+          foreach ($runtimeFile in $runtimePortableExecutables) {
+            $relativePath = $runtimeFile.FullName.Substring($runtimeDirectory.Length).TrimStart('\\')
+            $referenceFile = Join-Path $referenceDirectory $relativePath
+            if (-not (Test-Path -LiteralPath $referenceFile -PathType Leaf) -or -not (Test-PortableExecutable (Get-Item -LiteralPath $referenceFile))) {
+              throw "Unexpected PE in packaged Electron runtime: $relativePath"
+            }
+            $runtimeHash = (Get-FileHash -LiteralPath $runtimeFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $referenceHash = (Get-FileHash -LiteralPath $referenceFile -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($runtimeHash -cne $referenceHash) {
+              throw "Packaged Electron runtime PE differs from verified official Electron $electronVersion baseline: $relativePath"
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $runtimeFile.FullName
+            $subject = [string]$signature.SignerCertificate.Subject
+            $inventory += [pscustomobject]@{
+              path = $relativePath
+              sha256 = $runtimeHash
+              authenticodeStatus = [string]$signature.Status
+              signerSubject = $subject
+            }
+            "- Electron runtime $relativePath: Authenticode $($signature.Status); subject $subject" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          $inventory | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath release/ELECTRON_RUNTIME_INVENTORY.json -Encoding utf8
 
       - name: Generate and validate CycloneDX SBOM
         shell: pwsh
@@ -81,6 +208,24 @@ jobs:
           $sbom = (npm sbom --omit=dev --sbom-format cyclonedx | Out-String).TrimStart([char]0xFEFF) | ConvertFrom-Json
           $sbom.metadata.component.name = $package.name
           $sbom.metadata.component.version = $package.version
+          $electronVersion = [string]$package.devDependencies.electron
+          if ($electronVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Electron runtime version '$electronVersion' must be exact SemVer."
+          }
+          $electronPurl = "pkg:npm/electron@$electronVersion"
+          $existingElectron = @($sbom.components | Where-Object { $_.name -eq 'electron' -and $_.version -eq $electronVersion })
+          if ($existingElectron.Count -eq 0) {
+            $sbom.components += [pscustomobject]@{
+              type = 'application'
+              name = 'electron'
+              version = $electronVersion
+              purl = $electronPurl
+              properties = @([pscustomobject]@{ name = 'nexoip:runtime'; value = 'Packaged Electron runtime' })
+            }
+          }
+          if (@($sbom.components | Where-Object { $_.name -eq 'electron' -and $_.version -eq $electronVersion }).Count -ne 1) {
+            throw "CycloneDX SBOM must contain exactly one Electron $electronVersion runtime component."
+          }
           $sbomPath = "release/NexoIP-3D-Viewer-$env:GITHUB_REF_NAME-sbom.cdx.json"
           $sbomJson = $sbom | ConvertTo-Json -Depth 100
           [System.IO.File]::WriteAllText($sbomPath, $sbomJson, [System.Text.UTF8Encoding]::new($false))
@@ -90,9 +235,9 @@ jobs:
         shell: pwsh
         run: |
           $assets = @(Get-ChildItem release -File | Where-Object {
-            $_.Extension -eq '.exe' -or $_.Name -like '*.cdx.json' -or $_.Name -eq 'THIRD_PARTY_NOTICES.txt'
+            $_.Extension -eq '.exe' -or $_.Name -like '*.cdx.json' -or $_.Name -eq 'THIRD_PARTY_NOTICES.txt' -or $_.Name -eq 'ELECTRON_RUNTIME_INVENTORY.json'
           } | Sort-Object Name)
-          if ($assets.Count -lt 4) { throw 'Expected two executables, one SBOM, and third-party notices.' }
+          if ($assets.Count -lt 5) { throw 'Expected two executables, one SBOM, runtime inventory, and third-party notices.' }
           $lines = foreach ($asset in $assets) {
             $hash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($asset.Name)"
@@ -108,6 +253,7 @@ jobs:
             release/*.cdx.json
             release/SHA256SUMS.txt
             release/THIRD_PARTY_NOTICES.txt
+            release/ELECTRON_RUNTIME_INVENTORY.json
           if-no-files-found: error
           retention-days: 14
 
@@ -145,6 +291,12 @@ jobs:
         with:
           subject-path: release/*.exe
 
+      - name: Attest SBOM for Windows binaries
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release/*.exe
+          sbom-path: release/*.cdx.json
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -156,7 +308,8 @@ jobs:
             release/*.cdx.json
             release/SHA256SUMS.txt
             release/THIRD_PARTY_NOTICES.txt
+            release/ELECTRON_RUNTIME_INVENTORY.json
           body: |
-            Private, offline-first Windows 3D model viewer.
+            Offline-first Windows 3D model viewer.
 
-            Download either the per-user installer or portable executable. These binaries are currently **not Authenticode-signed**, so Windows may display a SmartScreen warning. Verify `SHA256SUMS.txt` and the attached GitHub build provenance before execution.
+            Download either the per-user installer or portable executable. NexoIP executables require a valid, timestamped Authenticode signature from the configured publisher; the bundled Electron runtime PE inventory is verified byte-for-byte against Electron's official release. Verify `SHA256SUMS.txt`, the attached CycloneDX SBOM, runtime inventory, and GitHub build provenance before execution.
