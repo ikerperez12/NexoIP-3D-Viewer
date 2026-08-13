@@ -65,7 +65,9 @@ test('packaged app opens a local model and keeps its primary controls usable', a
   ], {
     cwd: path.dirname(APP_PATH),
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
+    // GitHub's Windows runner needs an interactive top-level window for a
+    // packaged Electron renderer to finish its CDP initialization.
+    windowsHide: false,
   });
   appProcess.stdout.on('data', (chunk) => processLogs.push(chunk.toString()));
   appProcess.stderr.on('data', (chunk) => processLogs.push(chunk.toString()));
@@ -74,7 +76,11 @@ test('packaged app opens a local model and keeps its primary controls usable', a
   let browser;
   try {
     const endpoint = await waitForCdp(port, processLogs);
-    browser = await chromium.connectOverCDP(endpoint);
+    browser = await chromium.connectOverCDP(endpoint, {
+      // Electron owns this persistent context. Avoid Chromium-specific
+      // defaults (downloads/media/focus) that can stall Electron's CDP bridge.
+      noDefaults: true,
+    });
     const context = browser.contexts()[0];
     await expect.poll(() => context.pages().some((candidate) => candidate.url().startsWith('nexoip://'))).toBe(true);
     const appPage = context.pages().find((candidate) => candidate.url().startsWith('nexoip://'));
