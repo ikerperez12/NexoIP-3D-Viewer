@@ -1,8 +1,10 @@
-const { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } = require('electron');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-const { FileScanner } = require('./file-scanner.js');
-const {
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from 'electron';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fork } from 'node:child_process';
+import http from 'node:http';
+import { FileScanner } from './file-scanner.js';
+import {
   DEV_RENDERER_URL,
   PACKAGED_APP_ORIGIN,
   getAppAssetPath,
@@ -12,7 +14,10 @@ const {
   isOpaqueId,
   normalizeFilters,
   normalizeDevRendererUrl,
-} = require('./security.js');
+} from './security.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -30,6 +35,26 @@ const DIST_DIRECTORY = path.join(__dirname, '..', 'dist');
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
 
 let mainWindow = null;
+let serverProcess = null;
+
+function startBackendServer() {
+  const req = http.get('http://127.0.0.1:3001/api/files', () => {
+    console.log('[Electron] Servidor backend activo detectado.');
+  });
+
+  req.on('error', () => {
+    console.log('[Electron] Iniciando servidor backend embebido...');
+    const serverPath = path.join(__dirname, '../server/index.js');
+    try {
+      serverProcess = fork(serverPath, [], {
+        stdio: 'inherit',
+        env: { ...process.env, PORT: '3001' }
+      });
+    } catch (e) {
+      console.error('[Electron] Error iniciando servidor backend embebido:', e);
+    }
+  });
+}
 
 function createErrorResponse(status, message) {
   return new Response(message, {
@@ -94,7 +119,6 @@ function registerIpcHandler(channel, handler) {
     try {
       return await handler(payload);
     } catch {
-      // Do not reflect filesystem details to the renderer.
       throw new Error('The request could not be completed.');
     }
   });
@@ -186,6 +210,8 @@ function hardenWindow(webContents) {
 }
 
 async function createWindow() {
+  startBackendServer();
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
@@ -223,6 +249,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  if (serverProcess) {
+    serverProcess.kill();
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

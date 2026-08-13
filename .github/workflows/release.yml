@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify release tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must exactly match package version '$expectedTag'."
+          }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Package version '$version' is not valid SemVer."
+          }
+
+      - name: Run quality gates
+        run: npm run check
+
+      - name: Build installer and portable executable
+        run: npm run dist:win
+
+      - name: Record signing status
+        shell: pwsh
+        run: |
+          $executables = Get-ChildItem release -File -Filter '*.exe'
+          if ($executables.Count -lt 2) { throw 'Expected installer and portable executables.' }
+          foreach ($file in $executables) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            "- $($file.Name): Authenticode $($signature.Status)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            if ($signature.Status -notin @('Valid', 'NotSigned')) { throw "Invalid signature status for $($file.Name): $($signature.Status)" }
+          }
+
+      - name: Generate CycloneDX SBOM
+        shell: pwsh
+        run: |
+          $sbom = (npm sbom --sbom-format cyclonedx | Out-String).TrimStart([char]0xFEFF)
+          [System.IO.File]::WriteAllText(
+            "release/NexoIP-3D-Viewer-${{ github.ref_name }}-sbom.cdx.json",
+            $sbom,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          Get-Content "release/NexoIP-3D-Viewer-${{ github.ref_name }}-sbom.cdx.json" -Raw | ConvertFrom-Json | Out-Null
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem release -File | Where-Object { $_.Extension -eq '.exe' -or $_.Name -like '*.cdx.json' } | Sort-Object Name
+          $lines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($asset.Name)"
+          }
+          $lines | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding ascii
+
+      - name: Attest Windows binaries
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*.exe
+
+      - name: Upload release build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NexoIP-3D-Viewer-${{ github.ref_name }}-windows-x64
+          path: |
+            release/*.exe
+            release/*.cdx.json
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: NexoIP 3D Viewer ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*.exe
+            release/*.cdx.json
+            release/SHA256SUMS.txt
+          body: |
+            Private, offline-first Windows 3D model viewer.
+
+            Download either the per-user installer or portable executable. These binaries are currently **not Authenticode-signed**, so Windows may display a SmartScreen warning. Verify `SHA256SUMS.txt` and the attached GitHub build provenance before execution.

@@ -1,7 +1,7 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { randomBytes, createHash } = require('node:crypto');
-const {
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomBytes, createHash } from 'node:crypto';
+import {
   isOpaqueId,
   isPathInside,
   isSafeRelativePath,
@@ -9,16 +9,16 @@ const {
   isSupportedSidecarPath,
   normalizeFilters,
   safeResolveUnder,
-} = require('./security.js');
+} from './security.js';
 
-const MAX_SCAN_ROOTS = 8;
-const MAX_SCAN_DEPTH = 12;
-const MAX_SCANNED_DIRECTORIES = 10_000;
-const MAX_SCANNED_MODELS = 10_000;
-const MAX_MODEL_BYTES = 512 * 1024 * 1024;
-const MAX_DIRECTORY_ENTRIES = 20_000;
+export const MAX_SCAN_ROOTS = 8;
+export const MAX_SCAN_DEPTH = 12;
+export const MAX_SCANNED_DIRECTORIES = 10_000;
+export const MAX_SCANNED_MODELS = 10_000;
+export const MAX_MODEL_BYTES = 512 * 1024 * 1024;
+export const MAX_DIRECTORY_ENTRIES = 20_000;
 
-class FileScanner {
+export class FileScanner {
   constructor() {
     this.recordsById = new Map();
     this.idsByPath = new Map();
@@ -145,7 +145,16 @@ class FileScanner {
         }
 
         if (entry.isDirectory()) {
-          await this.#scanDirectory(candidatePath, rootPath, depth + 1);
+          try {
+            const realDirectoryPath = await fs.promises.realpath(candidatePath);
+            if (!isPathInside(rootPath, realDirectoryPath)) {
+              this.status.skippedEntries += 1;
+              continue;
+            }
+            await this.#scanDirectory(realDirectoryPath, rootPath, depth + 1);
+          } catch {
+            this.status.skippedEntries += 1;
+          }
           continue;
         }
 
@@ -323,20 +332,30 @@ class FileScanner {
       return null;
     }
 
-    if (assetPath === 'asset') {
-      return record.path;
-    }
-
-    if (!isSafeRelativePath(assetPath)) {
-      return null;
-    }
-
-    const candidatePath = safeResolveUnder(path.dirname(record.path), assetPath);
-    if (!candidatePath || !isSupportedSidecarPath(candidatePath)) {
-      return null;
-    }
-
     try {
+      if (assetPath === 'asset') {
+        const realPath = await fs.promises.realpath(record.path);
+        const stats = await fs.promises.stat(realPath);
+        if (
+          !stats.isFile() ||
+          stats.size > MAX_MODEL_BYTES ||
+          !isSupportedModelPath(realPath) ||
+          !isPathInside(record.rootPath, realPath)
+        ) {
+          return null;
+        }
+        return realPath;
+      }
+
+      if (!isSafeRelativePath(assetPath)) {
+        return null;
+      }
+
+      const candidatePath = safeResolveUnder(path.dirname(record.path), assetPath);
+      if (!candidatePath || !isSupportedSidecarPath(candidatePath)) {
+        return null;
+      }
+
       const realPath = await fs.promises.realpath(candidatePath);
       const stats = await fs.promises.stat(realPath);
       if (!stats.isFile() || stats.size > MAX_MODEL_BYTES || !isPathInside(path.dirname(record.path), realPath)) {
@@ -348,12 +367,3 @@ class FileScanner {
     }
   }
 }
-
-module.exports = {
-  FileScanner,
-  MAX_DIRECTORY_ENTRIES,
-  MAX_MODEL_BYTES,
-  MAX_SCAN_DEPTH,
-  MAX_SCANNED_DIRECTORIES,
-  MAX_SCANNED_MODELS,
-};

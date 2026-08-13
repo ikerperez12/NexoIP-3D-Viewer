@@ -1,7 +1,7 @@
 {
   "name": "nexoip-3d-viewer",
   "version": "1.0.0",
-  "description": "Visor 3D nativo y escáner masivo de modelos para Windows (.GLB, .GLTF, .OBJ, .STL, .FBX, .PLY, .DAE)",
+  "description": "Visor 3D nativo de escritorio y escáner masivo de archivos para Windows (.GLB, .GLTF, .OBJ, .STL, .FBX, .PLY, .DAE)",
   "author": "NexoIP",
   "license": "MIT",
   "private": false,

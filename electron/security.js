@@ -1,9 +1,9 @@
-const path = require('node:path');
+import path from 'node:path';
 
-const DEV_RENDERER_URL = 'http://127.0.0.1:3000/';
-const PACKAGED_APP_ORIGIN = 'nexoip://app';
-const OPAQUE_ID_PATTERN = /^[a-f0-9]{48}$/;
-const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
+export const DEV_RENDERER_URL = 'http://127.0.0.1:3000/';
+export const PACKAGED_APP_ORIGIN = 'nexoip://app';
+export const OPAQUE_ID_PATTERN = /^[a-f0-9]{48}$/;
+export const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
   '.glb',
   '.gltf',
   '.obj',
@@ -12,8 +12,8 @@ const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
   '.ply',
   '.dae',
 ]);
-const SUPPORTED_MODEL_EXTENSION_SET = new Set(SUPPORTED_MODEL_EXTENSIONS);
-const SUPPORTED_SIDECAR_EXTENSIONS = new Set([
+export const SUPPORTED_MODEL_EXTENSION_SET = new Set(SUPPORTED_MODEL_EXTENSIONS);
+export const SUPPORTED_SIDECAR_EXTENSIONS = new Set([
   '.bin',
   '.basis',
   '.dds',
@@ -27,10 +27,10 @@ const SUPPORTED_SIDECAR_EXTENSIONS = new Set([
   '.tga',
   '.webp',
 ]);
-const SORT_FIELDS = new Set(['name', 'size', 'modifiedAt']);
-const SORT_ORDERS = new Set(['asc', 'desc']);
+export const SORT_FIELDS = new Set(['name', 'size', 'modifiedAt']);
+export const SORT_ORDERS = new Set(['asc', 'desc']);
 
-function isPlainObject(value) {
+export function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -38,23 +38,23 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isOpaqueId(value) {
+export function isOpaqueId(value) {
   return typeof value === 'string' && OPAQUE_ID_PATTERN.test(value);
 }
 
-function getExtension(filePath) {
+export function getExtension(filePath) {
   return path.extname(filePath).toLowerCase();
 }
 
-function isSupportedModelPath(filePath) {
+export function isSupportedModelPath(filePath) {
   return typeof filePath === 'string' && SUPPORTED_MODEL_EXTENSION_SET.has(getExtension(filePath));
 }
 
-function isSupportedSidecarPath(filePath) {
+export function isSupportedSidecarPath(filePath) {
   return typeof filePath === 'string' && SUPPORTED_SIDECAR_EXTENSIONS.has(getExtension(filePath));
 }
 
-function normalizeFilters(input) {
+export function normalizeFilters(input) {
   if (input === undefined || input === null) {
     return { query: '', extension: 'all', sortBy: 'name', order: 'asc' };
   }
@@ -78,7 +78,7 @@ function normalizeFilters(input) {
   };
 }
 
-function decodePathSegment(value) {
+export function decodePathSegment(value) {
   if (typeof value !== 'string' || value.length === 0) {
     return null;
   }
@@ -91,7 +91,7 @@ function decodePathSegment(value) {
   }
 }
 
-function isSafeRelativePath(value) {
+export function isSafeRelativePath(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1024) {
     return false;
   }
@@ -104,12 +104,12 @@ function isSafeRelativePath(value) {
   return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 }
 
-function isPathInside(rootPath, candidatePath) {
+export function isPathInside(rootPath, candidatePath) {
   const relative = path.relative(rootPath, candidatePath);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-function safeResolveUnder(rootPath, relativePath) {
+export function safeResolveUnder(rootPath, relativePath) {
   if (!path.isAbsolute(rootPath) || !isSafeRelativePath(relativePath)) {
     return null;
   }
@@ -118,7 +118,7 @@ function safeResolveUnder(rootPath, relativePath) {
   return isPathInside(rootPath, candidatePath) ? candidatePath : null;
 }
 
-function getAppAssetPath(distDirectory, pathname) {
+export function getAppAssetPath(distDirectory, pathname) {
   const rawPath = pathname === '/' ? 'index.html' : pathname.replace(/^\//, '');
   const decodedPath = decodePathSegment(rawPath);
   if (!decodedPath) {
@@ -127,7 +127,7 @@ function getAppAssetPath(distDirectory, pathname) {
   return safeResolveUnder(distDirectory, decodedPath);
 }
 
-function getModelRoute(pathname) {
+export function getModelRoute(pathname) {
   if (typeof pathname !== 'string') {
     return null;
   }
@@ -155,7 +155,7 @@ function getModelRoute(pathname) {
   return { id, assetPath };
 }
 
-function normalizeDevRendererUrl(value) {
+export function normalizeDevRendererUrl(value) {
   let url;
   try {
     url = new URL(value);
@@ -179,7 +179,7 @@ function normalizeDevRendererUrl(value) {
   return DEV_RENDERER_URL;
 }
 
-function isAllowedRendererUrl(value, isPackaged) {
+export function isAllowedRendererUrl(value, isPackaged) {
   try {
     const url = new URL(value);
     if (isPackaged) {
@@ -191,26 +191,6 @@ function isAllowedRendererUrl(value, isPackaged) {
   }
 }
 
-function isAllowedNavigationUrl(value, isPackaged) {
+export function isAllowedNavigationUrl(value, isPackaged) {
   return isAllowedRendererUrl(value, isPackaged);
 }
-
-module.exports = {
-  DEV_RENDERER_URL,
-  PACKAGED_APP_ORIGIN,
-  SUPPORTED_MODEL_EXTENSIONS,
-  decodePathSegment,
-  getAppAssetPath,
-  getExtension,
-  getModelRoute,
-  isAllowedNavigationUrl,
-  isAllowedRendererUrl,
-  isOpaqueId,
-  isPathInside,
-  isSafeRelativePath,
-  isSupportedModelPath,
-  isSupportedSidecarPath,
-  normalizeDevRendererUrl,
-  normalizeFilters,
-  safeResolveUnder,
-};

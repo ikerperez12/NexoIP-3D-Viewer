@@ -1,29 +1,24 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
-import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { getFileExtension, SUPPORTED_MODEL_EXTENSIONS } from './nexoip.js';
 
-// Configurar decodificador Draco para GLB/GLTF comprimidos
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
-dracoLoader.setDecoderConfig({ type: 'js' });
-
-const gltfLoader = new GLTFLoader();
-gltfLoader.setDRACOLoader(dracoLoader);
-
-const objLoader = new OBJLoader();
-const stlLoader = new STLLoader();
-const fbxLoader = new FBXLoader();
-const plyLoader = new PLYLoader();
-const colladaLoader = new ColladaLoader();
+async function loadGltf(url, onProgress) {
+  const [{ GLTFLoader }, { DRACOLoader }] = await Promise.all([
+    import('three/examples/jsm/loaders/GLTFLoader.js'),
+    import('three/examples/jsm/loaders/DRACOLoader.js')
+  ]);
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
+  dracoLoader.setDecoderConfig({ type: 'js' });
+  const loader = new GLTFLoader().setDRACOLoader(dracoLoader);
+  try {
+    return await loader.loadAsync(url, onProgress);
+  } finally {
+    dracoLoader.dispose();
+  }
+}
 
 /**
- * Carga un modelo 3D desde una URL o un archivo de Blob local.
+ * Carga un modelo 3D desde la URL segura emitida por el bridge nativo.
  * Soporta .glb, .gltf, .obj, .stl, .fbx, .ply, .dae
  */
 export async function load3DModel(url, fileName = '', onProgress) {
@@ -43,17 +38,19 @@ export async function load3DModel(url, fileName = '', onProgress) {
   switch (ext) {
     case 'glb':
     case 'gltf': {
-      const gltf = await gltfLoader.loadAsync(url, progressHandler);
+      const gltf = await loadGltf(url, progressHandler);
       sceneGroup = gltf.scene || gltf.scenes[0];
       animations = gltf.animations || [];
       break;
     }
     case 'obj': {
-      sceneGroup = await objLoader.loadAsync(url, progressHandler);
+      const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
+      sceneGroup = await new OBJLoader().loadAsync(url, progressHandler);
       break;
     }
     case 'stl': {
-      const geometry = await stlLoader.loadAsync(url, progressHandler);
+      const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
+      const geometry = await new STLLoader().loadAsync(url, progressHandler);
       geometry.computeVertexNormals();
       const material = createDefaultPBRMaterial(0x6366f1, 'STL Model');
       const mesh = new THREE.Mesh(geometry, material);
@@ -62,13 +59,15 @@ export async function load3DModel(url, fileName = '', onProgress) {
       break;
     }
     case 'fbx': {
-      const fbxGroup = await fbxLoader.loadAsync(url, progressHandler);
+      const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+      const fbxGroup = await new FBXLoader().loadAsync(url, progressHandler);
       sceneGroup = fbxGroup;
       animations = fbxGroup.animations || [];
       break;
     }
     case 'ply': {
-      const geometry = await plyLoader.loadAsync(url, progressHandler);
+      const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+      const geometry = await new PLYLoader().loadAsync(url, progressHandler);
       geometry.computeVertexNormals();
       const hasColors = geometry.attributes.color !== undefined;
       const material = hasColors
@@ -80,7 +79,8 @@ export async function load3DModel(url, fileName = '', onProgress) {
       break;
     }
     case 'dae': {
-      const collada = await colladaLoader.loadAsync(url, progressHandler);
+      const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js');
+      const collada = await new ColladaLoader().loadAsync(url, progressHandler);
       sceneGroup = collada.scene;
       animations = collada.animations || [];
       break;

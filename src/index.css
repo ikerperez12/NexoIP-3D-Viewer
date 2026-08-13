@@ -1,3 +1,10 @@
+@import 'tailwindcss';
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/inter/latin-700.css';
+@import '@fontsource/jetbrains-mono/latin-400.css';
+@import '@fontsource/jetbrains-mono/latin-600.css';
+
 /* NexoIP 3D Viewer - Paleta Multicolor Premium estilo Studio/Blender */
 
 :root {
@@ -17,9 +24,19 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
+}
+
+button, select, [role="button"] {
   user-select: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--accent-amber);
+  outline-offset: 2px;
 }
 
 body, html, #root {
@@ -82,4 +99,13 @@ body, html, #root {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

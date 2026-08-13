@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible problem that is not security-sensitive.
+title: "[Bug]: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: For vulnerabilities, use the private process in SECURITY.md instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: 1.0.0 portable or installer
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Model format
+      options: [GLB, GLTF, OBJ, STL, FBX, PLY, DAE, Not model-related]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use a non-sensitive sample model where possible. Do not paste local paths containing personal data.
+      placeholder: "1. Open…\n2. Select…\n3. Observe…"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional context
+      description: Remove usernames, private paths, and other sensitive information before attaching logs or screenshots.

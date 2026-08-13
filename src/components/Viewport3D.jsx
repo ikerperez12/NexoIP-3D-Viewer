@@ -321,6 +321,8 @@ export default function Viewport3D({
       scene.clear();
       rendererRef.current = null;
     };
+  // Scene resources deliberately have one lifecycle; refs keep mutable Three.js state current.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -332,6 +334,11 @@ export default function Viewport3D({
     const nextCamera = isOrthographic ? orthographicCameraRef.current : perspectiveCameraRef.current;
     if (!controls || !nextCamera || cameraRef.current === nextCamera) return;
 
+    if (nextCamera.isOrthographicCamera && currentModelRef.current) {
+      const size = new THREE.Box3().setFromObject(currentModelRef.current).getSize(new THREE.Vector3());
+      nextCamera.userData.viewSize = Math.max(size.x, size.y, size.z, 0.01) * 1.8;
+      updateOrthographicFrustum(nextCamera, containerRef.current?.clientWidth || 1, containerRef.current?.clientHeight || 1);
+    }
     nextCamera.position.copy(cameraRef.current.position);
     nextCamera.quaternion.copy(cameraRef.current.quaternion);
     controls.object = nextCamera;
@@ -400,10 +407,13 @@ export default function Viewport3D({
     return () => {
       cancelled = true;
     };
+  // Reload only when the opaque model id changes or the user explicitly retries.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFile?.id, retryNonce]);
 
   useEffect(() => {
     applyRenderMode(renderMode);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderMode]);
 
   useEffect(() => {
@@ -444,6 +454,7 @@ export default function Viewport3D({
     action.time = THREE.MathUtils.clamp(seekRequest.value, 0, 1) * duration;
     mixerRef.current?.update(0);
     onAnimationProgress?.(THREE.MathUtils.clamp(seekRequest.value, 0, 1));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekRequest]);
 
   useEffect(() => {
@@ -464,6 +475,7 @@ export default function Viewport3D({
 
   useEffect(() => {
     if (resetCameraRequest && currentModelRef.current) centerAndFitCamera(currentModelRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetCameraRequest]);
 
   useEffect(() => {
@@ -479,15 +491,21 @@ export default function Viewport3D({
     const capture = async () => {
       try {
         const renderer = rendererRef.current;
-        const width = Math.max(1, Math.min(renderer.domElement.width, 1920));
-        const height = Math.max(1, Math.round(width * (renderer.domElement.height / renderer.domElement.width)));
+        const sourceWidth = Math.max(renderer.domElement.width, 1);
+        const sourceHeight = Math.max(renderer.domElement.height, 1);
+        const scale = Math.min(1, 1920 / Math.max(sourceWidth, sourceHeight));
+        const width = Math.max(1, Math.round(sourceWidth * scale));
+        const height = Math.max(1, Math.round(sourceHeight * scale));
         const target = new THREE.WebGLRenderTarget(width, height, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
-        renderer.setRenderTarget(target);
-        renderer.render(sceneRef.current, cameraRef.current);
         const pixels = new Uint8Array(width * height * 4);
-        renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
-        renderer.setRenderTarget(null);
-        target.dispose();
+        try {
+          renderer.setRenderTarget(target);
+          renderer.render(sceneRef.current, cameraRef.current);
+          renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+        } finally {
+          renderer.setRenderTarget(null);
+          target.dispose();
+        }
         if (cancelled) return;
 
         const canvas = document.createElement('canvas');
@@ -516,6 +534,7 @@ export default function Viewport3D({
     };
     void capture();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshotRequest]);
 
   return (

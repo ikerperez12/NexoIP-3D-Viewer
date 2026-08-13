@@ -1,13 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Viewport3D from './components/Viewport3D.jsx';
 import Toolbar3D from './components/Toolbar3D.jsx';
 import ModelInspector from './components/ModelInspector.jsx';
 import AnimationController from './components/AnimationController.jsx';
 import FileLibrarySidebar from './components/FileLibrarySidebar.jsx';
 import DropZone from './components/DropZone.jsx';
-import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
-import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import {
   callNexoip,
@@ -21,6 +17,8 @@ import {
   validateDroppedFile
 } from './utils/nexoip.js';
 
+const Viewport3D = React.lazy(() => import('./components/Viewport3D.jsx'));
+
 function getErrorMessage(error, fallback) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -32,6 +30,7 @@ export default function App() {
   const [folderTree, setFolderTree] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanRequestPending, setScanRequestPending] = useState(false);
   const [catalogError, setCatalogError] = useState(bridgeAvailable ? null : ELECTRON_BRIDGE_ERROR);
 
   const [renderMode, setRenderMode] = useState('pbr');
@@ -110,20 +109,24 @@ export default function App() {
 
   useEffect(() => {
     if (!bridgeAvailable) return undefined;
-    void loadCatalog();
-    void refreshScanStatus().catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo consultar el escáner local.')));
-    return undefined;
+    const startupTask = window.setTimeout(() => {
+      void loadCatalog();
+      void refreshScanStatus().catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo consultar el escáner local.')));
+    }, 0);
+    return () => window.clearTimeout(startupTask);
   }, [bridgeAvailable, loadCatalog, refreshScanStatus]);
 
   useEffect(() => {
-    if (!bridgeAvailable || !isScanning) return undefined;
+    if (!bridgeAvailable || (!isScanning && !scanRequestPending)) return undefined;
 
     scanWasActiveRef.current = true;
     const interval = window.setInterval(() => {
       void refreshScanStatus()
         .then(({ active }) => {
+          if (active) scanWasActiveRef.current = true;
           if (scanWasActiveRef.current && !active) {
             scanWasActiveRef.current = false;
+            setIsScanning(false);
             void loadCatalog({ announce: true });
           }
         })
@@ -133,7 +136,7 @@ export default function App() {
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [bridgeAvailable, isScanning, loadCatalog, refreshScanStatus]);
+  }, [bridgeAvailable, isScanning, loadCatalog, refreshScanStatus, scanRequestPending]);
 
   const handleStartScan = useCallback(async () => {
     if (!bridgeAvailable) {
@@ -142,15 +145,27 @@ export default function App() {
     }
 
     try {
+      setScanRequestPending(true);
+      scanWasActiveRef.current = false;
+      showToast('Elige una o más carpetas para iniciar el escaneo local.');
       const result = await callNexoip('scan');
       const status = responseStatus(result);
       const active = isScanInProgress(status);
       setScanStatus(status);
       setIsScanning(active);
       scanWasActiveRef.current = active;
-      showToast(active ? 'Escaneo local iniciado.' : 'El escáner ya está ocupado; mostrando su progreso.');
-      if (!active) await loadCatalog({ announce: true });
+      setScanRequestPending(false);
+      if (result?.cancelled) {
+        showToast('Escaneo cancelado. La biblioteca no se ha modificado.');
+      } else if (active) {
+        showToast('Escaneo local en curso.');
+      } else {
+        await loadCatalog({ announce: true });
+        showToast(`Escaneo completado: ${result?.count ?? 0} modelos indexados.`);
+      }
     } catch (error) {
+      setScanRequestPending(false);
+      setIsScanning(false);
       showToast(getErrorMessage(error, 'No se pudo iniciar el escaneo local.'), 'error');
     }
   }, [bridgeAvailable, loadCatalog, showToast]);
@@ -265,7 +280,7 @@ export default function App() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
   }, []);
 
-  const handleExportModel = useCallback((format) => {
+  const handleExportModel = useCallback(async (format) => {
     if (!modelData?.object) {
       showToast('No hay modelo cargado para exportar.', 'error');
       return;
@@ -274,14 +289,17 @@ export default function App() {
     const name = (currentFile?.name || 'modelo_3d').replace(/[^a-z0-9._-]+/gi, '_').replace(/\.[^.]+$/, '');
     try {
       if (format === 'stl') {
+        const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
         const result = new STLExporter().parse(modelData.object, { binary: true });
         downloadBlob(new Blob([result], { type: 'application/octet-stream' }), `${name}.stl`);
         showToast(`Modelo exportado como ${name}.stl.`);
       } else if (format === 'obj') {
+        const { OBJExporter } = await import('three/examples/jsm/exporters/OBJExporter.js');
         const result = new OBJExporter().parse(modelData.object);
         downloadBlob(new Blob([result], { type: 'text/plain' }), `${name}.obj`);
         showToast(`Modelo exportado como ${name}.obj.`);
       } else if (format === 'glb') {
+        const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
         new GLTFExporter().parse(
           modelData.object,
           (gltf) => {
@@ -295,31 +313,37 @@ export default function App() {
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo exportar el modelo.'), 'error');
     }
-  }, [currentFile?.name, downloadBlob, modelData?.object, showToast]);
+  }, [currentFile?.name, downloadBlob, modelData, showToast]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-black" aria-label="NexoIP 3D Viewer">
-      <Viewport3D
-        currentFile={currentFile}
-        renderMode={renderMode}
-        envPreset={envPreset}
-        showGrid={showGrid}
-        showAxes={showAxes}
-        autoRotate={autoRotate}
-        isOrthographic={isOrthographic}
-        cameraPresetRequest={cameraPresetRequest}
-        resetCameraRequest={resetCameraRequest}
-        snapshotRequest={snapshotRequest}
-        selectedClipIndex={currentClipIndex}
-        isPlaying={isPlaying}
-        playbackSpeed={speed}
-        seekRequest={seekRequest}
-        onModelLoaded={handleModelLoaded}
-        onAnimationProgress={handleAnimationProgress}
-        onSnapshotResult={(error) => showToast(error || 'Captura guardada.', error ? 'error' : 'success')}
-        onModelError={(message) => showToast(message, 'error')}
-        nodeVisibilityToggle={nodeVisibilityToggle}
-      />
+      <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-black text-sm text-gray-200" role="status">Preparando el visor 3D…</div>}>
+        <Viewport3D
+          currentFile={currentFile}
+          renderMode={renderMode}
+          envPreset={envPreset}
+          showGrid={showGrid}
+          showAxes={showAxes}
+          autoRotate={autoRotate}
+          isOrthographic={isOrthographic}
+          cameraPresetRequest={cameraPresetRequest}
+          resetCameraRequest={resetCameraRequest}
+          snapshotRequest={snapshotRequest}
+          selectedClipIndex={currentClipIndex}
+          isPlaying={isPlaying}
+          playbackSpeed={speed}
+          seekRequest={seekRequest}
+          onModelLoaded={handleModelLoaded}
+          onAnimationProgress={handleAnimationProgress}
+          onSnapshotResult={(error) => showToast(error || 'Captura guardada.', error ? 'error' : 'success')}
+          onModelError={(message) => {
+            setModelData(null);
+            setAnimations([]);
+            showToast(message, 'error');
+          }}
+          nodeVisibilityToggle={nodeVisibilityToggle}
+        />
+      </React.Suspense>
 
       <Toolbar3D
         currentFile={currentFile}
@@ -360,7 +384,7 @@ export default function App() {
         onRefresh={() => loadCatalog({ announce: true })}
         onStartScan={handleStartScan}
         scanStatus={scanStatus}
-        isScanning={isScanning}
+        isScanning={isScanning || scanRequestPending}
         bridgeAvailable={bridgeAvailable}
       />
 
@@ -384,7 +408,7 @@ export default function App() {
         setSpeed={setSpeed}
       />
 
-      <DropZone hasCurrentFile={Boolean(currentFile)} onDropFile={handleDroppedFile} onError={(message) => showToast(message, 'error')} />
+      <DropZone disabled={!bridgeAvailable} hasCurrentFile={Boolean(currentFile)} onDropFile={handleDroppedFile} onError={(message) => showToast(message, 'error')} />
 
       {catalogError && (
         <div className="absolute top-20 left-1/2 z-30 w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-amber-400/50 bg-black/90 px-4 py-3 text-center text-sm text-amber-100 shadow-2xl" role="alert">

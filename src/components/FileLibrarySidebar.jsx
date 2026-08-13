@@ -1,368 +1,193 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  X, Search, RefreshCw, Folder, HardDrive, CheckCircle2, 
-  ExternalLink, Filter, ChevronRight, ChevronDown, FolderTree, Sparkles, Box
+import React, { useMemo, useState } from 'react';
+import {
+  Box, ChevronDown, ChevronRight, ExternalLink, Folder, FolderTree,
+  HardDrive, RefreshCw, Search, Sparkles, X
 } from 'lucide-react';
+import { SUPPORTED_MODEL_EXTENSIONS } from '../utils/nexoip.js';
+
+function isMatchingFile(file, query, extension) {
+  if (!file?.id) return false;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  return (!normalizedQuery || String(file.name || '').toLocaleLowerCase().includes(normalizedQuery))
+    && (extension === 'all' || file.extension === extension);
+}
+
+function treeHasMatches(node, query, extension) {
+  if (!node) return false;
+  return (node.files || []).some((file) => isMatchingFile(file, query, extension))
+    || (node.children || []).some((child) => treeHasMatches(child, query, extension));
+}
+
+function statusLabel(scanStatus, isScanning) {
+  if (isScanning) return 'Escaneando archivos locales…';
+  if (scanStatus?.status === 'completed') return 'Escaneo local completado.';
+  return 'El escaneo se inicia solo cuando lo solicitas.';
+}
 
 export default function FileLibrarySidebar({
   isOpen,
   onClose,
+  files,
+  folderTree,
+  currentFileId,
   onSelectFile,
-  currentFile
+  onRevealFile,
+  onRefresh,
+  onStartScan,
+  scanStatus,
+  isScanning,
+  bridgeAvailable
 }) {
-  const [activeTab, setActiveTab] = useState('tree'); // 'tree' | 'flat'
-  const [files, setFiles] = useState([]);
-  const [folderTree, setFolderTree] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('tree');
   const [query, setQuery] = useState('');
   const [selectedExt, setSelectedExt] = useState('all');
-  const [scanStatus, setScanStatus] = useState(null);
-  const [isScanning, setIsScanning] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Cargar catálogo de archivos
-  const fetchCatalog = async () => {
+  const visibleFiles = useMemo(
+    () => files.filter((file) => isMatchingFile(file, query, selectedExt)),
+    [files, query, selectedExt]
+  );
+
+  const refresh = async () => {
+    setIsRefreshing(true);
     try {
-      setLoading(true);
-      const params = new URLSearchParams();
-      if (query) params.append('query', query);
-      if (selectedExt !== 'all') params.append('extension', selectedExt);
-
-      const [resFiles, resTree] = await Promise.all([
-        fetch(`/api/files?${params.toString()}`),
-        fetch('/api/tree')
-      ]);
-
-      const dataFiles = await resFiles.json();
-      const dataTree = await resTree.json();
-
-      if (dataFiles.success) setFiles(dataFiles.files);
-      if (dataTree.success) setFolderTree(dataTree.tree);
-    } catch (err) {
-      console.error('Error cargando catálogo NexoIP 3D:', err);
+      await onRefresh?.();
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const checkScanStatus = async () => {
-    try {
-      const res = await fetch('/api/scan-status');
-      const data = await res.json();
-      if (data.success) {
-        setScanStatus(data.status);
-        setIsScanning(data.status.isScanning);
-        if (!data.status.isScanning && isScanning) {
-          fetchCatalog();
-        }
-      }
-    } catch (err) {
-      console.error('Error comprobando estado del escáner:', err);
-    }
-  };
-
-  useEffect(() => {
-    fetchCatalog();
-    checkScanStatus();
-    const interval = setInterval(checkScanStatus, 2500);
-    return () => clearInterval(interval);
-  }, [query, selectedExt]);
-
-  const handleStartScan = async () => {
-    try {
-      setIsScanning(true);
-      await fetch('/api/scan', { method: 'POST' });
-      checkScanStatus();
-    } catch (err) {
-      console.error('Error iniciando escaneo masivo:', err);
-    }
-  };
-
-  const handleOpenInExplorer = async (filePath, e) => {
-    e.stopPropagation();
-    try {
-      await fetch('/api/open-in-explorer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath })
-      });
-    } catch (err) {
-      console.error('Error abriendo explorador:', err);
+      setIsRefreshing(false);
     }
   };
 
   if (!isOpen) return null;
 
+  const totalCached = scanStatus?.totalCached ?? scanStatus?.foundFiles ?? files.length;
+
   return (
-    <aside className="absolute top-20 left-4 bottom-4 w-80 md:w-96 z-20 glass-panel rounded-2xl flex flex-col overflow-hidden shadow-2xl animate-fade-in pointer-events-auto">
-      {/* Header */}
-      <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
+    <aside className="absolute bottom-4 left-4 top-20 z-20 flex w-80 flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel pointer-events-auto md:w-96" aria-label="Biblioteca de modelos locales">
+      <div className="flex items-center justify-between border-b border-white/10 bg-black/40 p-4">
         <div className="flex items-center gap-2">
-          <HardDrive size={18} className="text-amber-400" />
+          <HardDrive size={18} aria-hidden="true" className="text-amber-400" />
           <div>
-            <h3 className="font-semibold text-gray-100 text-sm">NexoIP 3D Viewer</h3>
-            <p className="text-[10px] text-emerald-400 font-mono">Explorador & Árbol de Carpetas</p>
+            <h2 className="text-sm font-semibold text-gray-100">NexoIP 3D Viewer</h2>
+            <p className="font-mono text-[10px] text-emerald-300">Biblioteca local y árbol de carpetas</p>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-        >
-          <X size={18} />
+        <button type="button" onClick={onClose} className="rounded-lg p-2 text-gray-300 hover:bg-white/10 hover:text-white" aria-label="Cerrar biblioteca">
+          <X size={18} aria-hidden="true" />
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-white/10 bg-black/60 p-1 gap-1">
-        <button
-          onClick={() => setActiveTab('tree')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
-            activeTab === 'tree'
-              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
-              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-          }`}
-        >
-          <FolderTree size={14} />
-          <span>Árbol de Carpetas</span>
+      <div className="flex gap-1 border-b border-white/10 bg-black/60 p-1" role="tablist" aria-label="Vista de biblioteca">
+        <button type="button" role="tab" aria-selected={activeTab === 'tree'} onClick={() => setActiveTab('tree')} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold ${activeTab === 'tree' ? 'border border-amber-500/50 bg-amber-500/30 text-amber-200' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+          <FolderTree size={14} aria-hidden="true" /> Árbol
         </button>
-        <button
-          onClick={() => setActiveTab('flat')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
-            activeTab === 'flat'
-              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
-              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-          }`}
-        >
-          <Box size={14} />
-          <span>Lista Plana ({files.length})</span>
+        <button type="button" role="tab" aria-selected={activeTab === 'flat'} onClick={() => setActiveTab('flat')} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold ${activeTab === 'flat' ? 'border border-emerald-500/50 bg-emerald-500/30 text-emerald-100' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+          <Box size={14} aria-hidden="true" /> Lista
         </button>
       </div>
 
-      {/* Panel Superior: Escáner Masivo y Filtros */}
-      <div className="p-3 border-b border-white/10 bg-black/30 space-y-2">
-        <button
-          onClick={handleStartScan}
-          disabled={isScanning}
-          className={`w-full py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all shadow-lg ${
-            isScanning
-              ? 'bg-amber-950/60 text-amber-300 border border-amber-500/30 cursor-not-allowed'
-              : 'bg-amber-500 hover:bg-amber-400 text-black shadow-amber-500/20'
-          }`}
-        >
-          <RefreshCw size={14} className={isScanning ? 'animate-spin' : ''} />
-          <span>{isScanning ? 'Escaneando discos masivamente...' : 'Escanear Todo el Ordenador'}</span>
-        </button>
-
-        {scanStatus && (
-          <div className="bg-black/50 p-2 rounded-xl border border-white/5 space-y-1">
-            <div className="flex items-center justify-between text-[11px] font-mono">
-              <span className="text-gray-400">Carpetas: {scanStatus.scannedFolders}</span>
-              <span className="text-amber-400 font-bold">{scanStatus.totalCached || files.length} objetos 3D</span>
-            </div>
-            {isScanning && (
-              <p className="text-[10px] text-emerald-400 truncate font-mono">
-                {scanStatus.currentPath}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Buscador */}
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Buscar modelo o ruta..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="w-full bg-black/50 text-gray-200 text-xs rounded-xl pl-8 pr-3 py-2 border border-white/10 outline-none focus:border-amber-500/60"
-          />
+      <div className="border-b border-white/10 bg-black/30 p-3">
+        <div className="mb-2 flex gap-2">
+          <button type="button" onClick={onStartScan} disabled={!bridgeAvailable || isScanning} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50" aria-describedby="scan-status">
+            {isScanning ? <RefreshCw size={14} aria-hidden="true" className="animate-spin" /> : <Sparkles size={14} aria-hidden="true" />}
+            {isScanning ? 'Escaneando…' : 'Escanear'}
+          </button>
+          <button type="button" onClick={refresh} disabled={!bridgeAvailable || isRefreshing} className="rounded-lg border border-white/15 p-2 text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Actualizar biblioteca">
+            <RefreshCw size={15} aria-hidden="true" className={isRefreshing ? 'animate-spin' : ''} />
+          </button>
         </div>
-
-        {/* Filtros por Extensión 3D */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-1 pt-1 no-scrollbar">
-          {[
-            { id: 'all', label: 'Todos' },
-            { id: 'glb', label: '.GLB' },
-            { id: 'gltf', label: '.GLTF' },
-            { id: 'obj', label: '.OBJ' },
-            { id: 'stl', label: '.STL' },
-            { id: 'fbx', label: '.FBX' },
-            { id: 'ply', label: '.PLY' },
-            { id: 'dae', label: '.DAE' }
-          ].map(ext => (
-            <button
-              key={ext.id}
-              onClick={() => setSelectedExt(ext.id)}
-              className={`px-2.5 py-1 text-[10px] font-mono rounded-lg transition-all shrink-0 ${
-                selectedExt === ext.id
-                  ? 'bg-amber-500 text-black font-extrabold shadow'
-                  : 'bg-black/40 text-gray-400 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              {ext.label}
-            </button>
-          ))}
+        <div id="scan-status" className="space-y-1 text-[10px]" role="status" aria-live="polite">
+          <div className="flex items-center justify-between text-gray-300">
+            <span>{statusLabel(scanStatus, isScanning)}</span>
+            <span className="font-mono font-bold text-emerald-300">{totalCached} modelos</span>
+          </div>
+          {isScanning && (
+            <>
+              <progress className="h-1.5 w-full accent-amber-400" aria-label="Escaneo local en curso" />
+              <span className="block text-gray-400">Carpetas revisadas: {scanStatus?.scannedFolders ?? 0}</span>
+            </>
+          )}
+          {!bridgeAvailable && <span className="block text-amber-200">Disponible solo desde la aplicación de escritorio.</span>}
         </div>
       </div>
 
-      {/* Contenido Principal */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center h-48 text-gray-500 text-xs gap-2">
-            <RefreshCw size={24} className="animate-spin text-amber-400" />
-            <span>Indexando archivos 3D...</span>
+      <div className="border-b border-white/10 p-3">
+        <label htmlFor="model-search" className="sr-only">Buscar modelos por nombre</label>
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/50 px-3 py-2 focus-within:border-emerald-400/60">
+          <Search size={15} aria-hidden="true" className="text-emerald-300" />
+          <input id="model-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por nombre…" className="w-full bg-transparent text-xs text-white outline-none placeholder:text-gray-400" />
+        </div>
+        <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Filtrar por formato">
+          {['all', ...SUPPORTED_MODEL_EXTENSIONS].map((extension) => {
+            const label = extension === 'all' ? 'Todos' : `.${extension.toUpperCase()}`;
+            return <button type="button" key={extension} onClick={() => setSelectedExt(extension)} aria-pressed={selectedExt === extension} className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-mono font-bold ${selectedExt === extension ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/60' : 'bg-white/5 text-gray-300 hover:bg-white/10'}`}>{label}</button>;
+          })}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3" aria-busy={isRefreshing}>
+        {isRefreshing ? (
+          <div className="flex flex-col items-center justify-center py-12 text-xs text-gray-300" role="status">
+            <RefreshCw size={24} aria-hidden="true" className="mb-2 animate-spin text-emerald-300" /> Actualizando biblioteca…
           </div>
-        ) : activeTab === 'tree' ? (
-          folderTree && folderTree.children && folderTree.children.length > 0 ? (
-            <TreeNode
-              node={folderTree}
-              onSelectFile={onSelectFile}
-              currentFile={currentFile}
-              onOpenInExplorer={handleOpenInExplorer}
-            />
-          ) : (
-            <div className="text-center text-gray-500 py-12 text-xs">
-              <FolderTree size={36} className="mx-auto mb-2 opacity-30 text-amber-400" />
-              <p>No hay árbol generado aún.</p>
-              <button
-                onClick={handleStartScan}
-                className="mt-2 text-amber-400 hover:underline inline-flex items-center gap-1 font-semibold"
-              >
-                <Sparkles size={12} /> Iniciar escaneo masivo
-              </button>
-            </div>
-          )
+        ) : activeTab === 'tree' && folderTree ? (
+          <div role="tabpanel" aria-label="Árbol de carpetas" className="space-y-0.5">
+            <TreeNode node={folderTree} query={query} extension={selectedExt} currentFileId={currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />
+          </div>
+        ) : visibleFiles.length === 0 ? (
+          <div className="py-12 text-center text-xs text-gray-400">
+            <Box size={36} aria-hidden="true" className="mx-auto mb-2 text-amber-300/50" />
+            <p>{files.length ? 'No hay coincidencias con los filtros.' : 'La biblioteca está vacía.'}</p>
+            {!isScanning && bridgeAvailable && <button type="button" onClick={onStartScan} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-amber-400/50 px-3 py-2 text-amber-100 hover:bg-amber-500/15"><Sparkles size={12} aria-hidden="true" /> Iniciar escaneo</button>}
+          </div>
         ) : (
-          /* Pestaña Lista Plana */
-          files.length === 0 ? (
-            <div className="text-center text-gray-500 py-12 text-xs">
-              <Box size={36} className="mx-auto mb-2 opacity-30 text-amber-400" />
-              <p>No se encontraron archivos 3D.</p>
-            </div>
-          ) : (
-            files.map((file) => {
-              const isActive = currentFile && currentFile.path === file.path;
-              return (
-                <div
-                  key={file.id || file.path}
-                  onClick={() => onSelectFile(file)}
-                  className={`p-2.5 rounded-xl transition-all cursor-pointer border group flex items-center justify-between ${
-                    isActive
-                      ? 'bg-amber-500/20 border-amber-500/60 shadow-lg'
-                      : 'bg-black/20 hover:bg-white/10 border-white/5'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase shrink-0 badge-${file.extension}`}>
-                      {file.extension}
-                    </span>
-                    <div className="flex flex-col truncate">
-                      <span className={`text-xs font-medium truncate ${isActive ? 'text-amber-200 font-bold' : 'text-gray-200 group-hover:text-white'}`}>
-                        {file.name}
-                      </span>
-                      <span className="text-[10px] text-gray-400 truncate font-mono">
-                        {file.folder}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={(e) => handleOpenInExplorer(file.path, e)}
-                    className="p-1.5 text-gray-500 hover:text-amber-300 hover:bg-white/10 rounded-lg transition-all shrink-0"
-                    title="Abrir carpeta en Explorador de Windows"
-                  >
-                    <ExternalLink size={14} />
-                  </button>
-                </div>
-              );
-            })
-          )
+          <div role="tabpanel" aria-label="Lista de modelos" className="space-y-1.5">
+            {visibleFiles.map((file) => <ModelRow key={file.id} file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />)}
+          </div>
         )}
       </div>
     </aside>
   );
 }
 
-/**
- * Componente recursivo para renderizar el Árbol de Carpetas
- */
-function TreeNode({ node, level = 0, onSelectFile, currentFile, onOpenInExplorer }) {
+function ModelRow({ file, isActive, onSelectFile, onRevealFile, compact = false }) {
+  return (
+    <div className={`flex items-center justify-between gap-1 rounded-xl border ${isActive ? 'border-amber-500/60 bg-amber-500/20' : 'border-white/5 bg-black/20 hover:bg-white/10'}`}>
+      <button type="button" onClick={() => onSelectFile(file.id)} aria-current={isActive ? 'true' : undefined} className={`flex min-w-0 flex-1 items-center gap-2.5 rounded-xl p-2.5 text-left ${isActive ? 'text-amber-100' : 'text-gray-100'}`}>
+        <span className={`shrink-0 rounded px-2 py-0.5 font-mono text-[10px] font-bold uppercase badge-${file.extension}`}>{file.extension}</span>
+        <span className="min-w-0 truncate text-xs font-medium">{file.name}</span>
+      </button>
+      <button type="button" onClick={() => onRevealFile(file.id)} className="mr-1 shrink-0 rounded-lg p-2 text-gray-300 hover:bg-white/10 hover:text-amber-200" aria-label={`Mostrar ${file.name} en el Explorador`} title="Mostrar en el Explorador">
+        <ExternalLink size={compact ? 12 : 14} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+function TreeNode({ node, query, extension, currentFileId, onSelectFile, onRevealFile, level = 0 }) {
   const [expanded, setExpanded] = useState(level < 2);
+  if (!node || !treeHasMatches(node, query, extension)) return null;
 
-  if (!node) return null;
-
-  const hasChildren = (node.children && node.children.length > 0) || (node.files && node.files.length > 0);
+  const children = (node.children || []).filter((child) => treeHasMatches(child, query, extension));
+  const files = (node.files || []).filter((file) => isMatchingFile(file, query, extension));
+  const hasContent = children.length > 0 || files.length > 0;
+  const isRoot = level === 0;
 
   return (
-    <div style={{ paddingLeft: level > 0 ? '10px' : '0px' }} className="text-xs">
-      {/* Fila de Carpeta */}
-      {node.name !== 'Equipo (Discos y Carpetas)' && (
-        <div
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-white/10 cursor-pointer group transition-all"
-        >
-          <div className="flex items-center gap-2 truncate">
-            {hasChildren ? (
-              expanded ? <ChevronDown size={14} className="text-amber-400 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />
-            ) : (
-              <div className="w-3.5" />
-            )}
-            <Folder size={16} className="text-amber-400 shrink-0" />
-            <span className="font-medium text-gray-200 truncate">{node.name}</span>
-          </div>
-
-          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/20 font-bold">
-            {node.filesCount}
+    <div className="text-xs" style={{ paddingLeft: isRoot ? 0 : 10 }}>
+      {!isRoot && (
+        <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-gray-100 hover:bg-white/10">
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            {hasContent ? (expanded ? <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-amber-300" /> : <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-gray-300" />) : <span className="w-3.5" />}
+            <Folder size={15} aria-hidden="true" className="shrink-0 text-amber-300" />
+            <span className="truncate font-medium">{node.name}</span>
           </span>
-        </div>
+          <span className="ml-2 rounded border border-emerald-500/20 bg-emerald-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-200">{node.filesCount ?? files.length}</span>
+        </button>
       )}
-
-      {/* Hijos de Carpeta o Archivos 3D */}
-      {(expanded || node.name === 'Equipo (Discos y Carpetas)') && (
-        <div className="space-y-0.5 mt-0.5">
-          {/* Subcarpetas */}
-          {node.children && node.children.map((sub, i) => (
-            <TreeNode
-              key={sub.path || i}
-              node={sub}
-              level={level + 1}
-              onSelectFile={onSelectFile}
-              currentFile={currentFile}
-              onOpenInExplorer={onOpenInExplorer}
-            />
-          ))}
-
-          {/* Archivos 3D dentro de esta carpeta */}
-          {node.files && node.files.map((file, i) => {
-            const isActive = currentFile && currentFile.path === file.path;
-            return (
-              <div
-                key={file.path || i}
-                style={{ paddingLeft: `${(level + 1) * 10}px` }}
-                onClick={() => onSelectFile(file)}
-                className={`py-1.5 px-2 rounded-lg flex items-center justify-between cursor-pointer transition-all ${
-                  isActive
-                    ? 'bg-amber-500/30 border border-amber-500/60 text-white font-bold'
-                    : 'hover:bg-white/10 text-gray-300'
-                }`}
-              >
-                <div className="flex items-center gap-2 truncate">
-                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono uppercase badge-${file.extension}`}>
-                    {file.extension}
-                  </span>
-                  <span className="truncate">{file.name}</span>
-                </div>
-
-                <button
-                  onClick={(e) => onOpenInExplorer(file.path, e)}
-                  className="p-1 text-gray-500 hover:text-amber-300 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
-                  title="Abrir en Explorador de Windows"
-                >
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            );
-          })}
+      {(isRoot || expanded) && (
+        <div className="space-y-0.5">
+          {children.map((child, index) => <TreeNode key={child.id || `${child.name}-${index}`} node={child} query={query} extension={extension} currentFileId={currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} level={level + 1} />)}
+          {files.map((file) => <ModelRow key={file.id} compact file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />)}
         </div>
       )}
     </div>

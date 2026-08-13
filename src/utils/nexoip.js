@@ -47,7 +47,7 @@ export function responseTree(response) {
 }
 
 export function responseStatus(response) {
-  return response?.status ?? response ?? null;
+  return response?.status && typeof response.status === 'object' ? response.status : response ?? null;
 }
 
 export function responseModel(response) {
@@ -64,7 +64,7 @@ export function getFileExtension(fileName = '') {
 }
 
 export function validateDroppedFile(file) {
-  if (!(file instanceof File)) return 'Selecciona un archivo 3D válido.';
+  if (typeof File === 'undefined' || !(file instanceof File)) return 'Selecciona un archivo 3D válido.';
 
   const extension = getFileExtension(file.name);
   if (!extension) {
