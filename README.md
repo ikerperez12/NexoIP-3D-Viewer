@@ -110,7 +110,7 @@ npm audit --audit-level=high
 npm run test:e2e
 ```
 
-The packaged smoke test also verifies every Electron 43 fuse explicitly and fails if a future runtime adds an unreviewed fuse.
+`npm run test:e2e` runs the complete interactive packaged-app test on a Windows desktop. GitHub-hosted runners use `npm run test:smoke:ci`, which verifies every Electron 43 fuse, starts the real executable, loads a local STL through the preload bridge, checks its geometry, and rejects non-local runtime resources without relying on desktop automation.
 
 ## Known limitations
 

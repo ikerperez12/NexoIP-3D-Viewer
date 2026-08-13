@@ -55,7 +55,7 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
 
       - name: Smoke test packaged application
-        run: npm run test:e2e:run
+        run: npm run test:smoke:run
 
       - name: Stage third-party notices
         shell: pwsh

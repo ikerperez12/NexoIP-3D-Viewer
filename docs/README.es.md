@@ -59,7 +59,7 @@ Para generar instalador y portable:
 npm run dist:win
 ```
 
-`npm run test:e2e` empaqueta la aplicación, comprueba todos los fuses de Electron y ejecuta una prueba real del visor sobre Windows.
+`npm run test:e2e` empaqueta la aplicación, comprueba todos los fuses de Electron y ejecuta la prueba interactiva completa del visor en un escritorio Windows. En los runners alojados de GitHub, `npm run test:smoke:ci` valida el ejecutable real, el bridge seguro, un STL local y sus métricas mediante CDP directo, sin depender de automatización gráfica.
 
 Los binarios se generan en `release/`, pero no se versionan en Git. Las distribuciones oficiales se publican únicamente como assets de una GitHub Release.
 
