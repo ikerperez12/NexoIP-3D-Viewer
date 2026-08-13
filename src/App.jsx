@@ -5,6 +5,7 @@ import AnimationController from './components/AnimationController.jsx';
 import FileLibrarySidebar from './components/FileLibrarySidebar.jsx';
 import DropZone from './components/DropZone.jsx';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { exportModelAsGlb } from './utils/exporters.js';
 import {
   callNexoip,
   ELECTRON_BRIDGE_ERROR,
@@ -19,6 +20,10 @@ import {
 
 const Viewport3D = React.lazy(() => import('./components/Viewport3D.jsx'));
 
+function isCompactViewport() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 48rem)').matches;
+}
+
 function getErrorMessage(error, fallback) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -31,6 +36,7 @@ export default function App() {
   const [scanStatus, setScanStatus] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanRequestPending, setScanRequestPending] = useState(false);
+  const [isCancellingScan, setIsCancellingScan] = useState(false);
   const [catalogError, setCatalogError] = useState(bridgeAvailable ? null : ELECTRON_BRIDGE_ERROR);
 
   const [renderMode, setRenderMode] = useState('pbr');
@@ -40,10 +46,12 @@ export default function App() {
   const [autoRotate, setAutoRotate] = useState(false);
   const [isOrthographic, setIsOrthographic] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(() => !isCompactViewport());
+  const [compactLayout, setCompactLayout] = useState(isCompactViewport);
 
   const [modelData, setModelData] = useState(null);
   const [cameraPresetRequest, setCameraPresetRequest] = useState(null);
+  const [cameraControlRequest, setCameraControlRequest] = useState(null);
   const [resetCameraRequest, setResetCameraRequest] = useState(0);
   const [snapshotRequest, setSnapshotRequest] = useState(0);
   const [nodeVisibilityToggle, setNodeVisibilityToggle] = useState(null);
@@ -54,10 +62,14 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [seekRequest, setSeekRequest] = useState(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
   const scanWasActiveRef = useRef(false);
+  const exportInProgressRef = useRef(false);
+  const sidebarTriggerRef = useRef(null);
+  const inspectorTriggerRef = useRef(null);
 
   const currentIndex = useMemo(
     () => filesList.findIndex((file) => file.id === currentFile?.id),
@@ -71,6 +83,16 @@ export default function App() {
   }, []);
 
   useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 48rem)');
+    const updateLayout = (event) => {
+      setCompactLayout(event.matches);
+      if (event.matches) setInspectorOpen(false);
+    };
+    mediaQuery.addEventListener('change', updateLayout);
+    return () => mediaQuery.removeEventListener('change', updateLayout);
+  }, []);
 
   const refreshScanStatus = useCallback(async () => {
     if (!bridgeAvailable) return null;
@@ -92,6 +114,11 @@ export default function App() {
       const nextFiles = responseFiles(modelsResponse).filter((file) => file?.id);
       setFilesList(nextFiles);
       setFolderTree(responseTree(treeResponse));
+      if (nextFiles.length === 0) {
+        setModelData(null);
+        setAnimations([]);
+        setProgress(0);
+      }
       setCurrentFile((previous) => {
         const selected = previous && nextFiles.find((file) => file.id === previous.id);
         return selected || nextFiles[0] || null;
@@ -179,8 +206,12 @@ export default function App() {
       setIsScanning(active);
       scanWasActiveRef.current = active;
       setScanRequestPending(false);
-      if (result?.cancelled) {
-        showToast('Escaneo cancelado. La biblioteca no se ha modificado.');
+      setIsCancellingScan(false);
+      if (result?.cancelled && typeof result?.status !== 'string') {
+        showToast('No se seleccionaron carpetas. La biblioteca no se ha modificado.');
+      } else if (result?.cancelled || status?.status === 'cancelled') {
+        await loadCatalog();
+        showToast(`Escaneo detenido: se conservan ${result?.count ?? 0} modelos indexados hasta ese momento.`);
       } else if (active) {
         showToast('Escaneo local en curso.');
       } else {
@@ -190,9 +221,33 @@ export default function App() {
     } catch (error) {
       setScanRequestPending(false);
       setIsScanning(false);
+      setIsCancellingScan(false);
       showToast(getErrorMessage(error, 'No se pudo iniciar el escaneo local.'), 'error');
     }
   }, [bridgeAvailable, loadCatalog, showToast]);
+
+  const handleCancelScan = useCallback(async () => {
+    if (!bridgeAvailable || isCancellingScan) return;
+
+    let cancellationRequested = false;
+    try {
+      setIsCancellingScan(true);
+      const result = await callNexoip('cancelScan');
+      const status = responseStatus(result);
+      setScanStatus(status);
+      if (result?.cancelled) {
+        cancellationRequested = true;
+        showToast('Deteniendo el escaneo de forma segura…');
+      } else {
+        setIsScanning(false);
+        showToast('No hay ningún escaneo activo.');
+      }
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo detener el escaneo local.'), 'error');
+    } finally {
+      if (!cancellationRequested) setIsCancellingScan(false);
+    }
+  }, [bridgeAvailable, isCancellingScan, showToast]);
 
   const selectFileById = useCallback((fileId) => {
     const nextFile = filesList.find((file) => file.id === fileId);
@@ -224,7 +279,8 @@ export default function App() {
       const isTextEntry = element instanceof HTMLElement && (
         element.isContentEditable || /^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(element.tagName)
       );
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isTextEntry) return;
+      const isViewportControl = element instanceof HTMLElement && Boolean(element.closest('[data-viewport-controls]'));
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isTextEntry || isViewportControl) return;
 
       if (event.key === 'ArrowRight') {
         event.preventDefault();
@@ -242,8 +298,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectRelativeModel]);
 
-  const handleModelLoaded = useCallback(({ object, animations: nextAnimations, stats }) => {
-    setModelData({ object, stats });
+  const handleModelLoaded = useCallback(({ object, exportObject, animations: nextAnimations, stats, metadata }) => {
+    setModelData({
+      object,
+      exportObject: exportObject || object,
+      animations: nextAnimations || [],
+      stats,
+      metadata: metadata || null
+    });
     setAnimations(nextAnimations || []);
     setCurrentClipIndex(0);
     setIsPlaying(true);
@@ -305,37 +367,46 @@ export default function App() {
   }, []);
 
   const handleExportModel = useCallback(async (format) => {
-    if (!modelData?.object) {
+    const exportObject = modelData?.exportObject || modelData?.object;
+    if (!exportObject) {
       showToast('No hay modelo cargado para exportar.', 'error');
       return;
     }
 
+    if (exportInProgressRef.current) {
+      showToast('Ya hay una exportación en curso.', 'error');
+      return;
+    }
+
     const name = (currentFile?.name || 'modelo_3d').replace(/[^a-z0-9._-]+/gi, '_').replace(/\.[^.]+$/, '');
+    exportInProgressRef.current = true;
+    setIsExporting(true);
     try {
       if (format === 'stl') {
         const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
-        const result = new STLExporter().parse(modelData.object, { binary: true });
+        const result = new STLExporter().parse(exportObject, { binary: true });
         downloadBlob(new Blob([result], { type: 'application/octet-stream' }), `${name}.stl`);
-        showToast(`Modelo exportado como ${name}.stl.`);
+        showToast(`Geometría original exportada como ${name}.stl. Este formato no conserva materiales ni animaciones.`);
       } else if (format === 'obj') {
         const { OBJExporter } = await import('three/examples/jsm/exporters/OBJExporter.js');
-        const result = new OBJExporter().parse(modelData.object);
+        const result = new OBJExporter().parse(exportObject);
         downloadBlob(new Blob([result], { type: 'text/plain' }), `${name}.obj`);
-        showToast(`Modelo exportado como ${name}.obj.`);
+        showToast(`Geometría original exportada como ${name}.obj. Las texturas no se incluyen en este archivo.`);
       } else if (format === 'glb') {
-        const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
-        new GLTFExporter().parse(
-          modelData.object,
-          (gltf) => {
-            downloadBlob(new Blob([gltf], { type: 'model/gltf-binary' }), `${name}.glb`);
-            showToast(`Modelo exportado como ${name}.glb.`);
-          },
-          () => showToast('No se pudo exportar el modelo a GLB.', 'error'),
-          { binary: true }
-        );
+        const gltf = await exportModelAsGlb(exportObject, modelData.animations || []);
+        downloadBlob(new Blob([gltf], { type: 'model/gltf-binary' }), `${name}.glb`);
+        const clipCount = modelData.animations?.length || 0;
+        showToast(`Activo original exportado como ${name}.glb${clipCount ? ` con ${clipCount} animaciones` : ''}.`);
+      } else {
+        throw new Error('Formato de exportación no compatible.');
       }
+      // Exporters may reuse the clean source clone with transient GPU resources;
+      // the live viewport remains the authoritative owner until the model changes.
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo exportar el modelo.'), 'error');
+    } finally {
+      exportInProgressRef.current = false;
+      setIsExporting(false);
     }
   }, [currentFile?.name, downloadBlob, modelData, showToast]);
 
@@ -352,6 +423,7 @@ export default function App() {
           isOrthographic={isOrthographic}
           cameraPresetRequest={cameraPresetRequest}
           resetCameraRequest={resetCameraRequest}
+          cameraControlRequest={cameraControlRequest}
           snapshotRequest={snapshotRequest}
           selectedClipIndex={currentClipIndex}
           isPlaying={isPlaying}
@@ -364,6 +436,12 @@ export default function App() {
             setModelData(null);
             setAnimations([]);
             showToast(message, 'error');
+          }}
+          onChooseAnotherModel={() => {
+            setCurrentFile(null);
+            setModelData(null);
+            setAnimations([]);
+            setSidebarOpen(true);
           }}
           nodeVisibilityToggle={nodeVisibilityToggle}
         />
@@ -383,23 +461,37 @@ export default function App() {
         setAutoRotate={setAutoRotate}
         resetCamera={() => setResetCameraRequest(Date.now())}
         setCameraPreset={(preset) => setCameraPresetRequest({ preset, timestamp: Date.now() })}
+        onCameraControl={(action) => {
+          if (action === 'reset') setResetCameraRequest(Date.now());
+          else setCameraControlRequest({ action, timestamp: Date.now() });
+        }}
         takeSnapshot={() => setSnapshotRequest(Date.now())}
         isOrthographic={isOrthographic}
         setIsOrthographic={setIsOrthographic}
         sidebarOpen={sidebarOpen}
-        setSidebarOpen={setSidebarOpen}
+        setSidebarOpen={(nextOpen) => {
+          setSidebarOpen(nextOpen);
+          if (nextOpen && compactLayout) setInspectorOpen(false);
+        }}
         inspectorOpen={inspectorOpen}
-        setInspectorOpen={setInspectorOpen}
+        setInspectorOpen={(nextOpen) => {
+          setInspectorOpen(nextOpen);
+          if (nextOpen && compactLayout) setSidebarOpen(false);
+        }}
         onPrevModel={() => selectRelativeModel(-1)}
         onNextModel={() => selectRelativeModel(1)}
         onRandomModel={handleRandomModel}
         currentIndex={currentIndex}
         totalCount={filesList.length}
+        sidebarTriggerRef={sidebarTriggerRef}
+        inspectorTriggerRef={inspectorTriggerRef}
       />
 
       <FileLibrarySidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onRequestClose={() => setSidebarOpen(false)}
+        triggerRef={sidebarTriggerRef}
         files={filesList}
         folderTree={folderTree}
         currentFileId={currentFile?.id}
@@ -407,8 +499,10 @@ export default function App() {
         onRevealFile={handleRevealModel}
         onRefresh={() => loadCatalog({ announce: true })}
         onStartScan={handleStartScan}
+        onCancelScan={handleCancelScan}
         scanStatus={scanStatus}
         isScanning={isScanning || scanRequestPending}
+        isCancellingScan={isCancellingScan}
         bridgeAvailable={bridgeAvailable}
       />
 
@@ -416,8 +510,11 @@ export default function App() {
         stats={modelData?.stats || null}
         isOpen={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
+        onRequestClose={() => setInspectorOpen(false)}
+        triggerRef={inspectorTriggerRef}
         toggleNodeVisibility={(uuid, visible) => setNodeVisibilityToggle({ uuid, visible, timestamp: Date.now() })}
         onExportModel={handleExportModel}
+        isExporting={isExporting}
       />
 
       <AnimationController
@@ -440,7 +537,6 @@ export default function App() {
         </div>
       )}
 
-      <div className="sr-only" role="status" aria-live="polite">{toast?.message || ''}</div>
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 flex max-w-sm items-center gap-3 rounded-xl border px-4 py-3 shadow-2xl glass-panel ${
           toast.type === 'error' ? 'border-red-500/60 text-red-100' : 'border-emerald-500/60 text-emerald-100'

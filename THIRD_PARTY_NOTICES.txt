@@ -33,12 +33,20 @@ Runtime components
   Copyright Google Inc. and other contributors.
   https://github.com/google/draco
 
+- Basis Universal transcoder - Apache License 2.0
+  Copyright 2019-2026 Binomial LLC.
+  https://github.com/BinomialLLC/basis_universal
+
+- meshoptimizer decoder 0.18 - MIT License
+  Copyright (c) 2016-2022 Arseny Kapoulkine.
+  https://github.com/zeux/meshoptimizer
+
 Electron packages also include LICENSE.electron.txt and
 LICENSES.chromium.html alongside the executable.
 
 
-MIT License (React, React DOM, and Three.js)
----------------------------------------------
+MIT License (React, React DOM, Three.js, and meshoptimizer)
+-----------------------------------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

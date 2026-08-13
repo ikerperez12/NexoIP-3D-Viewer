@@ -38,8 +38,6 @@ jobs:
 
       - name: Run packaged application smoke test
         run: npm run test:smoke:ci
-        env:
-          NEXOIP_SMOKE_SCREENSHOT: test-results/packaged-app.png
 
       - name: Upload production renderer
         if: always() && hashFiles('dist/**') != ''

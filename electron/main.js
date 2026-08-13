@@ -2,10 +2,17 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } fr
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FileScanner } from './file-scanner.js';
+import { createSecureModelResponse } from './protocol-response.js';
+import {
+  loadPackagedSelfTestConfig,
+  runPackagedSelfTest,
+  writePackagedSelfTestReport,
+} from './packaged-self-test.js';
 import {
   DEV_RENDERER_URL,
   PACKAGED_APP_ORIGIN,
   getAppAssetPath,
+  getModelAssetMimeType,
   getModelRoute,
   isAllowedNavigationUrl,
   isAllowedRendererUrl,
@@ -13,6 +20,7 @@ import {
   normalizeFilters,
   normalizeDevRendererUrl,
 } from './security.js';
+import { findUnsafePackagedArguments, getPackagedSelfTestRequest } from './startup-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,8 +43,17 @@ const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
 let mainWindow = null;
 const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
 let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
+const unsafeStartupArguments = app.isPackaged ? findUnsafePackagedArguments(startupArguments) : [];
+const packagedSelfTestRequest = app.isPackaged ? getPackagedSelfTestRequest(startupArguments) : null;
+const startupIsAllowed = unsafeStartupArguments.length === 0 && (!packagedSelfTestRequest || packagedSelfTestRequest.valid);
 
-if (!app.requestSingleInstanceLock()) {
+if (!startupIsAllowed) {
+  const reason = unsafeStartupArguments.length > 0
+    ? `Unsafe packaged startup argument rejected: ${unsafeStartupArguments.join(', ')}`
+    : packagedSelfTestRequest.reason;
+  process.stderr.write(`NexoIP 3D Viewer refused to start. ${reason}\n`);
+  app.exit(78);
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
@@ -80,12 +97,12 @@ async function handleNexoipProtocol(request) {
 
   const modelRoute = getModelRoute(requestUrl.pathname);
   if (modelRoute) {
-    const modelFile = await scanner.resolveModelAsset(modelRoute.id, modelRoute.assetPath);
-    if (!modelFile) {
+    const modelAsset = await scanner.openModelAsset(modelRoute.id, modelRoute.assetPath);
+    if (!modelAsset) {
       return createErrorResponse(404, 'Model not found');
     }
 
-    return net.fetch(pathToFileURL(modelFile).toString());
+    return createSecureModelResponse(request.method, modelAsset, getModelAssetMimeType(modelAsset.path));
   }
 
   const appAsset = getAppAssetPath(DIST_DIRECTORY, requestUrl.pathname);
@@ -127,6 +144,7 @@ function registerIpcHandlers() {
   registerIpcHandler('nexoip:list-models', (filters) => scanner.listModels(normalizeFilters(filters)));
   registerIpcHandler('nexoip:get-tree', () => scanner.getTree());
   registerIpcHandler('nexoip:get-scan-status', () => scanner.getStatus());
+  registerIpcHandler('nexoip:cancel-scan', () => scanner.cancelScan());
   registerIpcHandler('nexoip:consume-startup-model', async () => {
     if (!pendingStartupPath) return null;
     const startupPath = pendingStartupPath;
@@ -146,7 +164,7 @@ function registerIpcHandlers() {
     }
 
     const result = await scanner.scanDirectories(selection.filePaths);
-    return { cancelled: false, ...result };
+    return { cancelled: result.status === 'cancelled', ...result };
   });
 
   registerIpcHandler('nexoip:reveal-model', (id) => {
@@ -214,7 +232,7 @@ function hardenWindow(webContents) {
   });
 }
 
-async function createWindow() {
+async function createWindow({ show = true } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
@@ -223,6 +241,7 @@ async function createWindow() {
     title: 'NexoIP 3D Viewer',
     backgroundColor: '#000000',
     autoHideMenuBar: true,
+    show,
     webPreferences: {
       preload: PRELOAD_PATH,
       nodeIntegration: false,
@@ -244,30 +263,51 @@ async function createWindow() {
   await mainWindow.loadURL(normalizeDevRendererUrl(process.env.ELECTRON_RENDERER_URL || DEV_RENDERER_URL));
 }
 
-app.whenReady().then(async () => {
-  protocol.handle('nexoip', handleNexoipProtocol);
-  configureSession();
-  registerIpcHandlers();
-  await createWindow();
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
+async function runConfiguredPackagedSelfTest() {
+  const config = await loadPackagedSelfTestConfig(packagedSelfTestRequest);
+  const report = await runPackagedSelfTest({ scanner, config, renderer: mainWindow.webContents });
+  await writePackagedSelfTestReport(config.resultPath, report);
+  if (report.status !== 'passed') {
+    throw new Error(report.error || 'The packaged self-test failed.');
   }
-});
+  process.stdout.write('NexoIP packaged self-test passed without a debugging transport.\n');
+}
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    void createWindow();
-  }
-});
+if (startupIsAllowed) {
+  app.whenReady().then(async () => {
+    try {
+      protocol.handle('nexoip', handleNexoipProtocol);
+      configureSession();
+      registerIpcHandlers();
+      await createWindow({ show: !packagedSelfTestRequest });
+      if (packagedSelfTestRequest) {
+        await runConfiguredPackagedSelfTest();
+        app.quit();
+      }
+    } catch (error) {
+      process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${error instanceof Error ? error.message : String(error)}\n`);
+      app.exit(1);
+    }
+  });
 
-app.on('second-instance', (_event, commandLine) => {
-  const candidate = commandLine.find((argument, index) => index > 0 && path.isAbsolute(argument));
-  if (candidate) void openModelFromCommandLine(candidate);
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void createWindow();
+    }
+  });
+
+  app.on('second-instance', (_event, commandLine) => {
+    const candidate = commandLine.find((argument, index) => index > 0 && path.isAbsolute(argument));
+    if (candidate) void openModelFromCommandLine(candidate);
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}

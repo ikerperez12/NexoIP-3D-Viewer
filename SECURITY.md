@@ -2,11 +2,12 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest published release and the current `main` branch.
+There is currently no stable supported release. Security reports are accepted for the public alpha and the current `main` branch, and critical fixes will be prioritised on a best-effort basis while the stable release gates are completed.
 
 | Version | Supported |
 | --- | --- |
-| Latest 1.x | Yes |
+| `1.0.0` alpha | Best effort |
+| Stable release | Not yet available |
 | Older releases | No |
 
 ## Report a vulnerability privately
@@ -29,6 +30,8 @@ You should receive an acknowledgement within seven days. We will validate the re
 - Sandboxed renderer with context isolation and no Node.js integration.
 - Narrow preload API, validated IPC, opaque model IDs, and no filesystem paths exposed to UI code.
 - Local asset protocol with extension, size, containment, and symlink checks.
+- Production startup rejects remote-debugging, inspector, sandbox-bypass, and web-security-bypass switches before creating a window.
+- Model assets are streamed from an already-open, identity-checked file handle to avoid path swap races.
 - Remote navigation, pop-ups, webviews, and permission requests are denied.
 - Bundled fonts and Draco decoder; the application has no runtime CDN dependency.
 
@@ -36,4 +39,4 @@ The full boundary model is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTUR
 
 ## Release verification
 
-Each release includes SHA-256 checksums, a CycloneDX SBOM, and GitHub build provenance. Current Windows executables are not Authenticode-signed, so verify these materials before running them. Checksums establish integrity, not publisher identity.
+The alpha release includes SHA-256 checksums, a CycloneDX SBOM, and GitHub build provenance. Its Windows executables are not Authenticode-signed, so verify these materials before running them. Checksums establish integrity, not publisher identity. A stable release is blocked until all distributed executables carry a valid trusted signature and the remaining [product-readiness gates](docs/PRODUCT_READINESS.md) pass.

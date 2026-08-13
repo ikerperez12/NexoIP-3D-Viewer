@@ -1,5 +1,8 @@
 # NexoIP 3D Viewer
 
+> [!WARNING]
+> **Alpha technical preview.** `v1.0.0` is an evaluation build, not the stable product target. Format fidelity, accessibility, resource limits and Windows signing are being hardened against the public [product-readiness gates](docs/PRODUCT_READINESS.md). Do not treat the current binaries as production-ready.
+
 <p align="center">
   <img src="public/icon.svg" width="112" alt="NexoIP 3D Viewer logo">
 </p>
@@ -17,29 +20,31 @@
 
 <p align="center">
   <a href="docs/README.es.md">Español</a> ·
-  <a href="https://github.com/ikerperez12/NexoIP-3D-Viewer/releases/latest">Download</a> ·
+  <a href="https://github.com/ikerperez12/NexoIP-3D-Viewer/releases/tag/v1.0.0">Alpha download</a> ·
   <a href="SECURITY.md">Security</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ![NexoIP 3D Viewer inspecting a local model](.github/assets/nexoip-3d-viewer.png)
 
-## What it does
+## What the alpha does
 
-NexoIP 3D Viewer opens and inspects `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae` files without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app.
+NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app.
 
-- PBR, wireframe, normals, and matcap-inspired render modes.
+The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`, but support is not yet uniform. Draco, Meshopt and KTX2 are wired for glTF; adjacent OBJ/MTL files, STL colours, and PLY meshes or point clouds are supported. Compressed glTF, textured OBJ, FBX and DAE still lack a release-grade packaged fixture matrix. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
+
+- PBR, wireframe, normals, X-ray, and unlit render modes.
 - Perspective and orthographic cameras, standard views, grid, axes, auto-rotation, and camera reset.
-- Seven studio-lighting presets on a true black background.
+- Six studio-lighting presets, including a true black studio background.
 - Geometry, dimensions, hierarchy, materials, and animation inspection.
 - Working animation selection, playback, seeking, and speed controls.
 - GLB, STL, and OBJ export plus PNG snapshots.
 - Keyboard navigation and accessible names, status announcements, focus states, and reduced-motion support.
 - Local Draco decoder and bundled fonts: model viewing does not depend on a CDN.
 
-## Download for Windows
+## Alpha download for Windows
 
-Download the installer or portable build from the [latest GitHub Release](https://github.com/ikerperez12/NexoIP-3D-Viewer/releases/latest):
+The existing installer and portable build are available from the [`v1.0.0` alpha technical preview](https://github.com/ikerperez12/NexoIP-3D-Viewer/releases/tag/v1.0.0):
 
 | Asset | Use |
 | --- | --- |
@@ -49,7 +54,7 @@ Download the installer or portable build from the [latest GitHub Release](https:
 | `*.cdx.json` | CycloneDX software bill of materials |
 | `THIRD_PARTY_NOTICES.txt` | Licenses and attribution for bundled components |
 
-The current Windows binaries are not Authenticode-signed. Windows may therefore show a SmartScreen warning. Verify the SHA-256 checksum before running a download; source and GitHub Actions build provenance are attached to each release. Code signing is planned, but it requires a trusted signing certificate.
+The alpha Windows binaries are not Authenticode-signed. Windows may therefore show a SmartScreen warning or an organisation policy may block them entirely. Verify the SHA-256 checksum before running a download; checksums establish integrity, not publisher identity. A future stable release will require a valid trusted signature and will fail its release gate if any executable is unsigned.
 
 ### Verify a download
 
@@ -77,6 +82,8 @@ See [the security policy](SECURITY.md) and [architecture notes](docs/ARCHITECTUR
 | Mouse wheel | Zoom |
 | `←` / `→` | Previous / next model |
 | `R` | Reset camera |
+| Keyboard camera menu | Discrete orbit, pan, and zoom without dragging |
+| Arrow keys while the viewport is focused | Pan the camera |
 
 ## Build from source
 
@@ -108,17 +115,23 @@ npm test
 npm run build
 npm audit --audit-level=high
 npm run test:e2e
+npm run dist:win
+npm run test:release-artifacts
 ```
 
-`npm run test:e2e` runs the complete interactive packaged-app test on a Windows desktop. GitHub-hosted runners use `npm run test:smoke:ci`, which verifies every Electron 43 fuse, starts the real executable, loads a local STL through the preload bridge, checks its geometry, and rejects non-local runtime resources without relying on desktop automation.
+`npm run test:e2e` and the hosted `npm run test:smoke:ci` gate verify every Electron 43 fuse, prove that the distributed executable rejects debugging transports, start the real packaged application without CDP, exercise the preload bridge and private `nexoip://` model protocol, and verify the four bundled Draco/Basis runtimes. After `npm run dist:win`, `npm run test:release-artifacts` silently installs the NSIS package into an isolated temporary directory, runs the same capability checks, uninstalls it and exercises the portable executable. Loader unit tests separately parse small real glTF, OBJ/MTL, STL and PLY fixtures and round-trip an animated GLB.
+
+These are alpha baseline checks. They do not yet prove the full seven-format matrix in the packaged application, WCAG 2.2 AA at Windows scaling extremes, long-running GPU stability, a clean Windows 10/11 test matrix, or Authenticode identity. The additional required evidence is tracked in [Product readiness](docs/PRODUCT_READINESS.md).
 
 ## Known limitations
 
+- `v1.0.0` is an alpha technical preview; there is no supported stable release yet.
 - Windows x64 is the only supported release target today.
+- Format support is partial as described in the [support matrix](docs/PRODUCT_READINESS.md); an accepted extension does not yet guarantee full material, texture, animation, scene or export fidelity.
 - Linked resources supported by a format loader must live beside the approved model and use an allowlisted local sidecar format.
 - Dimensions are reported in the model's own unit (`u`); source formats do not always define a real-world scale.
 - Very large or malformed assets may be rejected to protect responsiveness and memory usage.
-- Release binaries are currently unsigned; see the download warning above.
+- Alpha binaries are unsigned; a stable release is blocked until trusted signing is configured.
 
 ## Contributing and license
 

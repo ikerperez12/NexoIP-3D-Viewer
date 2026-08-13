@@ -15,14 +15,42 @@ export const MAX_SCAN_ROOTS = 8;
 export const MAX_SCAN_DEPTH = 12;
 export const MAX_SCANNED_DIRECTORIES = 10_000;
 export const MAX_SCANNED_MODELS = 10_000;
-export const MAX_MODEL_BYTES = 512 * 1024 * 1024;
+export const MAX_MODEL_BYTES = 256 * 1024 * 1024;
 export const MAX_DIRECTORY_ENTRIES = 20_000;
 
+function toFileIdentity(stats) {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+  };
+}
+
+function hasSameFileIdentity(left, right) {
+  return left
+    && right
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs;
+}
+
+function isReadableRegularFile(stats) {
+  return stats.isFile() && stats.size >= 0 && stats.size <= MAX_MODEL_BYTES;
+}
+
+function closeFileHandle(fileHandle) {
+  return fileHandle?.close().catch(() => undefined);
+}
+
 export class FileScanner {
-  constructor() {
+  constructor({ openFile = fs.promises.open } = {}) {
     this.recordsById = new Map();
     this.idsByPath = new Map();
+    this.openFile = openFile;
     this.isScanning = false;
+    this.scanAbortController = null;
     this.status = this.#createStatus('idle');
   }
 
@@ -36,6 +64,10 @@ export class FileScanner {
       selectedFolderCount: 0,
       truncated: false,
     };
+  }
+
+  #isCancelled() {
+    return this.scanAbortController?.signal.aborted === true;
   }
 
   #newOpaqueId() {
@@ -66,6 +98,10 @@ export class FileScanner {
       return this.recordsById.get(existingId);
     }
 
+    if (this.recordsById.size >= MAX_SCANNED_MODELS) {
+      throw new RangeError('The local model registry reached its safety limit.');
+    }
+
     const record = {
       id: this.#newOpaqueId(),
       path: realPath,
@@ -74,6 +110,7 @@ export class FileScanner {
       extension: path.extname(realPath).toLowerCase(),
       size: stats.size,
       modifiedAt: stats.mtime.toISOString(),
+      identity: toFileIdentity(stats),
     };
 
     this.recordsById.set(record.id, record);
@@ -89,6 +126,7 @@ export class FileScanner {
     const canonicalRoots = [];
     const seenRoots = new Set();
     for (const root of roots) {
+      if (this.#isCancelled()) break;
       if (typeof root !== 'string' || !path.isAbsolute(root)) {
         throw new TypeError('Invalid folder selection.');
       }
@@ -103,29 +141,32 @@ export class FileScanner {
       canonicalRoots.push(canonicalRoot);
     }
 
-    if (canonicalRoots.length === 0) {
+    if (canonicalRoots.length === 0 && !this.#isCancelled()) {
       throw new TypeError('No readable folders were selected.');
     }
     return canonicalRoots;
   }
 
   async #scanDirectory(directoryPath, rootPath, depth) {
+    if (this.#isCancelled()) return true;
     if (
-      depth > MAX_SCAN_DEPTH ||
-      this.status.scannedDirectories >= MAX_SCANNED_DIRECTORIES ||
-      this.recordsById.size >= MAX_SCANNED_MODELS
+      depth > MAX_SCAN_DEPTH
+      || this.status.scannedDirectories >= MAX_SCANNED_DIRECTORIES
+      || this.recordsById.size >= MAX_SCANNED_MODELS
     ) {
       this.status.truncated = true;
-      return;
+      return false;
     }
 
     let directory;
     try {
       directory = await fs.promises.opendir(directoryPath);
+      if (this.#isCancelled()) return true;
       this.status.scannedDirectories += 1;
       let entryCount = 0;
 
       for await (const entry of directory) {
+        if (this.#isCancelled()) return true;
         entryCount += 1;
         if (entryCount > MAX_DIRECTORY_ENTRIES) {
           this.status.skippedEntries += 1;
@@ -151,7 +192,7 @@ export class FileScanner {
               this.status.skippedEntries += 1;
               continue;
             }
-            await this.#scanDirectory(realDirectoryPath, rootPath, depth + 1);
+            if (await this.#scanDirectory(realDirectoryPath, rootPath, depth + 1)) return true;
           } catch {
             this.status.skippedEntries += 1;
           }
@@ -174,7 +215,7 @@ export class FileScanner {
             this.status.skippedEntries += 1;
             continue;
           }
-          if (!stats.isFile() || stats.size > MAX_MODEL_BYTES) {
+          if (!isReadableRegularFile(stats)) {
             this.status.skippedEntries += 1;
             continue;
           }
@@ -192,6 +233,7 @@ export class FileScanner {
         await directory.close().catch(() => undefined);
       }
     }
+    return this.#isCancelled();
   }
 
   async scanDirectories(roots) {
@@ -200,6 +242,7 @@ export class FileScanner {
     }
 
     this.isScanning = true;
+    this.scanAbortController = new AbortController();
     this.status = this.#createStatus('scanning');
 
     try {
@@ -209,19 +252,34 @@ export class FileScanner {
       this.idsByPath.clear();
 
       for (const rootPath of canonicalRoots) {
-        await this.#scanDirectory(rootPath, rootPath, 0);
+        if (await this.#scanDirectory(rootPath, rootPath, 0)) break;
       }
 
-      this.status.status = 'completed';
+      const cancelled = this.#isCancelled();
+      this.status.status = cancelled ? 'cancelled' : 'completed';
       this.status.foundModels = this.recordsById.size;
-      return { status: 'completed', count: this.recordsById.size, truncated: this.status.truncated };
+      return {
+        status: this.status.status,
+        count: this.recordsById.size,
+        truncated: this.status.truncated,
+      };
     } catch (error) {
       this.status.status = 'failed';
       throw error;
     } finally {
       this.isScanning = false;
+      this.scanAbortController = null;
       this.status.isScanning = false;
     }
+  }
+
+  cancelScan() {
+    if (!this.isScanning || !this.scanAbortController || this.scanAbortController.signal.aborted) {
+      return { cancelled: false, status: this.getStatus() };
+    }
+
+    this.scanAbortController.abort();
+    return { cancelled: true, status: this.getStatus() };
   }
 
   async registerDroppedPath(filePath) {
@@ -231,7 +289,7 @@ export class FileScanner {
 
     const realPath = await fs.promises.realpath(filePath);
     const stats = await fs.promises.stat(realPath);
-    if (!stats.isFile() || !isSupportedModelPath(realPath) || stats.size > MAX_MODEL_BYTES) {
+    if (!isReadableRegularFile(stats) || !isSupportedModelPath(realPath)) {
       throw new TypeError('Unsupported dropped file.');
     }
 
@@ -322,46 +380,74 @@ export class FileScanner {
     return isOpaqueId(id) ? this.recordsById.get(id)?.path || null : null;
   }
 
-  async resolveModelAsset(id, assetPath) {
-    if (!isOpaqueId(id) || typeof assetPath !== 'string') {
+  async #openVerifiedFile(candidatePath, expectedIdentity, allowedPath, isAllowedPath) {
+    let fileHandle;
+    try {
+      fileHandle = await this.openFile(candidatePath, 'r');
+      const openedStats = await fileHandle.stat();
+      if (!isReadableRegularFile(openedStats)
+        || !isAllowedPath(allowedPath)
+        || !hasSameFileIdentity(toFileIdentity(openedStats), expectedIdentity)) {
+        await closeFileHandle(fileHandle);
+        return null;
+      }
+
+      const stream = fileHandle.createReadStream({ autoClose: true });
+      stream.once('error', () => void closeFileHandle(fileHandle));
+      stream.once('end', () => void closeFileHandle(fileHandle));
+      stream.once('close', () => void closeFileHandle(fileHandle));
+      return { stream, size: openedStats.size, path: candidatePath };
+    } catch {
+      await closeFileHandle(fileHandle);
       return null;
     }
+  }
+
+  async openModelAsset(id, assetPath) {
+    if (!isOpaqueId(id) || typeof assetPath !== 'string') return null;
 
     const record = this.recordsById.get(id);
-    if (!record) {
-      return null;
-    }
+    if (!record) return null;
 
     try {
       if (assetPath === 'asset') {
-        const realPath = await fs.promises.realpath(record.path);
-        const stats = await fs.promises.stat(realPath);
-        if (
-          !stats.isFile() ||
-          stats.size > MAX_MODEL_BYTES ||
-          !isSupportedModelPath(realPath) ||
-          !isPathInside(record.rootPath, realPath)
-        ) {
-          return null;
-        }
-        return realPath;
+        return this.#openVerifiedFile(
+          record.path,
+          record.identity,
+          record.path,
+          (candidatePath) => isSupportedModelPath(candidatePath) && isPathInside(record.rootPath, candidatePath),
+        );
       }
 
-      if (!isSafeRelativePath(assetPath)) {
-        return null;
-      }
+      if (!isSafeRelativePath(assetPath)) return null;
 
       const candidatePath = safeResolveUnder(path.dirname(record.path), assetPath);
-      if (!candidatePath || !isSupportedSidecarPath(candidatePath)) {
-        return null;
-      }
+      if (!candidatePath || !isSupportedSidecarPath(candidatePath)) return null;
 
+      // Resolve once to establish the permitted target, then compare its identity with
+      // the already-open descriptor. The served stream never reopens the pathname.
       const realPath = await fs.promises.realpath(candidatePath);
-      const stats = await fs.promises.stat(realPath);
-      if (!stats.isFile() || stats.size > MAX_MODEL_BYTES || !isPathInside(path.dirname(record.path), realPath)) {
-        return null;
-      }
-      return realPath;
+      const expectedStats = await fs.promises.stat(realPath);
+      if (!isReadableRegularFile(expectedStats) || !isPathInside(path.dirname(record.path), realPath)) return null;
+
+      return this.#openVerifiedFile(
+        candidatePath,
+        toFileIdentity(expectedStats),
+        realPath,
+        (resolvedPath) => isSupportedSidecarPath(resolvedPath) && isPathInside(path.dirname(record.path), resolvedPath),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  async resolveModelAsset(id, assetPath) {
+    const asset = await this.openModelAsset(id, assetPath);
+    if (!asset) return null;
+    const chunks = [];
+    try {
+      for await (const chunk of asset.stream) chunks.push(chunk);
+      return Buffer.concat(chunks);
     } catch {
       return null;
     }

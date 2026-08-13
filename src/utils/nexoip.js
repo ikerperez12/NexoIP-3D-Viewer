@@ -8,7 +8,8 @@ export const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
   'dae'
 ]);
 
-export const MAX_DROPPED_FILE_BYTES = 250 * 1024 * 1024;
+// Keep the renderer hint aligned with the authoritative main-process limit.
+export const MAX_DROPPED_FILE_BYTES = 256 * 1024 * 1024;
 
 export const ELECTRON_BRIDGE_ERROR =
   'NexoIP 3D Viewer debe abrirse desde la aplicación de escritorio para acceder a archivos locales.';

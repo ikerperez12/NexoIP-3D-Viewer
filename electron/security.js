@@ -23,12 +23,35 @@ export const SUPPORTED_SIDECAR_EXTENSIONS = new Set([
   '.jpg',
   '.ktx',
   '.ktx2',
+  '.mtl',
   '.png',
   '.tga',
   '.webp',
 ]);
 export const SORT_FIELDS = new Set(['name', 'size', 'modifiedAt']);
 export const SORT_ORDERS = new Set(['asc', 'desc']);
+const MODEL_ASSET_MIME_TYPES = new Map([
+  ['.basis', 'application/octet-stream'],
+  ['.bin', 'application/octet-stream'],
+  ['.dae', 'model/vnd.collada+xml'],
+  ['.dds', 'image/vnd-ms.dds'],
+  ['.fbx', 'application/octet-stream'],
+  ['.gif', 'image/gif'],
+  ['.glb', 'model/gltf-binary'],
+  ['.gltf', 'model/gltf+json'],
+  ['.hdr', 'application/octet-stream'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.ktx', 'image/ktx'],
+  ['.ktx2', 'image/ktx2'],
+  ['.mtl', 'text/plain; charset=utf-8'],
+  ['.obj', 'text/plain; charset=utf-8'],
+  ['.ply', 'application/octet-stream'],
+  ['.png', 'image/png'],
+  ['.stl', 'model/stl'],
+  ['.tga', 'image/x-tga'],
+  ['.webp', 'image/webp'],
+]);
 
 export function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -52,6 +75,10 @@ export function isSupportedModelPath(filePath) {
 
 export function isSupportedSidecarPath(filePath) {
   return typeof filePath === 'string' && SUPPORTED_SIDECAR_EXTENSIONS.has(getExtension(filePath));
+}
+
+export function getModelAssetMimeType(filePath) {
+  return MODEL_ASSET_MIME_TYPES.get(getExtension(filePath)) || 'application/octet-stream';
 }
 
 export function normalizeFilters(input) {
