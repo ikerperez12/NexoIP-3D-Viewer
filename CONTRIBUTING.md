@@ -5,7 +5,7 @@ Thanks for helping improve NexoIP 3D Viewer.
 ## Before opening a pull request
 
 1. Discuss large features in an issue first. Report security problems privately as described in [SECURITY.md](SECURITY.md).
-2. Use Node.js 22.12 or newer on Windows and install the exact lockfile with `npm ci`.
+2. Use Node.js 24.12 or newer on Windows and install the exact lockfile with `npm ci`.
 3. Keep the application offline-first. Do not add telemetry, remote fonts, CDN assets, embedded servers, arbitrary filesystem access, or renderer-visible paths.
 4. Keep IPC capabilities narrow and validate again in the main process; preload validation is not a trust boundary by itself.
 5. Add or update tests for behavior and security boundaries.

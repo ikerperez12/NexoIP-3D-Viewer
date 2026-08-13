@@ -43,7 +43,7 @@ Consulta [SECURITY.md](../SECURITY.md) y [la arquitectura](ARCHITECTURE.md) para
 
 ## Compilar desde el código
 
-Requisitos: Windows 10/11 x64, Node.js 22.12 o posterior y npm 10 o posterior.
+Requisitos: Windows 10/11 x64, Node.js 24.12 o posterior y npm 11 o posterior.
 
 ```powershell
 git clone https://github.com/ikerperez12/NexoIP-3D-Viewer.git

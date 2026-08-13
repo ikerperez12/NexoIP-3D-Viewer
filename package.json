@@ -19,7 +19,7 @@
     "url": "https://github.com/ikerperez12/NexoIP-3D-Viewer/issues"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.12.0"
   },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"vite\" \"wait-on http-get://127.0.0.1:3000 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:3000 electron .\"",

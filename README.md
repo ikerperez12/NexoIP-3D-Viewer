@@ -80,7 +80,7 @@ See [the security policy](SECURITY.md) and [architecture notes](docs/ARCHITECTUR
 
 ## Build from source
 
-Requirements: Windows 10/11 x64, Node.js 22.12 or newer, and npm 10 or newer.
+Requirements: Windows 10/11 x64, Node.js 24.12 or newer, and npm 11 or newer.
 
 ```powershell
 git clone https://github.com/ikerperez12/NexoIP-3D-Viewer.git
