@@ -60,6 +60,7 @@ test('packaged app opens a local model and keeps its primary controls usable', a
     `--user-data-dir=${profileDirectory}`,
     '--disable-background-networking',
     '--disable-component-update',
+    '--lang=en-US',
     '--use-angle=swiftshader',
     '--enable-unsafe-swiftshader',
   ], {

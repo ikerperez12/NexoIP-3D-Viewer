@@ -8,6 +8,7 @@ const APP_PATH = path.resolve('release', 'win-unpacked', 'NexoIP 3D Viewer.exe')
 const FIXTURE_PATH = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
 const DIAGNOSTICS_DIRECTORY = path.resolve('test-results');
 const TIMEOUT_MS = 25_000;
+const REQUIRED_LOCALES = ['en-GB.pak', 'en-US.pak', 'es-419.pak', 'es.pak'];
 const EXPECTED_BRIDGE = [
   'consumeStartupModel',
   'getModelUrl',
@@ -172,6 +173,10 @@ async function main() {
   assert(process.platform === 'win32', 'This packaged smoke check targets Windows x64.');
   assert(fs.existsSync(APP_PATH), `Missing packaged executable: ${APP_PATH}`);
   assert(fs.existsSync(FIXTURE_PATH), `Missing model fixture: ${FIXTURE_PATH}`);
+  for (const locale of REQUIRED_LOCALES) {
+    assert(fs.existsSync(path.join(path.dirname(APP_PATH), 'locales', locale)),
+      `Missing packaged locale: ${locale}`);
+  }
 
   const port = await reserveLoopbackPort();
   const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'nexoip-smoke-'));
@@ -184,6 +189,7 @@ async function main() {
     `--user-data-dir=${profileDirectory}`,
     '--disable-background-networking',
     '--disable-component-update',
+    '--lang=en-US',
     '--use-angle=swiftshader',
     '--enable-unsafe-swiftshader',
     '--enable-logging=file',
