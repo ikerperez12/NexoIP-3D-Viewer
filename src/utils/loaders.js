@@ -6,10 +6,11 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
+import { getFileExtension, SUPPORTED_MODEL_EXTENSIONS } from './nexoip.js';
 
 // Configurar decodificador Draco para GLB/GLTF comprimidos
 const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
 dracoLoader.setDecoderConfig({ type: 'js' });
 
 const gltfLoader = new GLTFLoader();
@@ -25,8 +26,16 @@ const colladaLoader = new ColladaLoader();
  * Carga un modelo 3D desde una URL o un archivo de Blob local.
  * Soporta .glb, .gltf, .obj, .stl, .fbx, .ply, .dae
  */
-export async function load3DModel(url, fileName = '') {
-  const ext = (fileName || url).split('.').pop().toLowerCase();
+export async function load3DModel(url, fileName = '', onProgress) {
+  const ext = getFileExtension(fileName || url);
+  if (!ext) {
+    throw new Error(`Formato no soportado. Soportados: ${SUPPORTED_MODEL_EXTENSIONS.map((item) => item.toUpperCase()).join(', ')}.`);
+  }
+
+  const progressHandler = (event) => {
+    if (!onProgress || !event?.lengthComputable) return;
+    onProgress(Math.max(0, Math.min(1, event.loaded / event.total)));
+  };
   
   let sceneGroup = new THREE.Group();
   let animations = [];
@@ -34,17 +43,17 @@ export async function load3DModel(url, fileName = '') {
   switch (ext) {
     case 'glb':
     case 'gltf': {
-      const gltf = await gltfLoader.loadAsync(url);
+      const gltf = await gltfLoader.loadAsync(url, progressHandler);
       sceneGroup = gltf.scene || gltf.scenes[0];
       animations = gltf.animations || [];
       break;
     }
     case 'obj': {
-      sceneGroup = await objLoader.loadAsync(url);
+      sceneGroup = await objLoader.loadAsync(url, progressHandler);
       break;
     }
     case 'stl': {
-      const geometry = await stlLoader.loadAsync(url);
+      const geometry = await stlLoader.loadAsync(url, progressHandler);
       geometry.computeVertexNormals();
       const material = createDefaultPBRMaterial(0x6366f1, 'STL Model');
       const mesh = new THREE.Mesh(geometry, material);
@@ -53,13 +62,13 @@ export async function load3DModel(url, fileName = '') {
       break;
     }
     case 'fbx': {
-      const fbxGroup = await fbxLoader.loadAsync(url);
+      const fbxGroup = await fbxLoader.loadAsync(url, progressHandler);
       sceneGroup = fbxGroup;
       animations = fbxGroup.animations || [];
       break;
     }
     case 'ply': {
-      const geometry = await plyLoader.loadAsync(url);
+      const geometry = await plyLoader.loadAsync(url, progressHandler);
       geometry.computeVertexNormals();
       const hasColors = geometry.attributes.color !== undefined;
       const material = hasColors
@@ -71,14 +80,13 @@ export async function load3DModel(url, fileName = '') {
       break;
     }
     case 'dae': {
-      const collada = await colladaLoader.loadAsync(url);
+      const collada = await colladaLoader.loadAsync(url, progressHandler);
       sceneGroup = collada.scene;
       animations = collada.animations || [];
       break;
     }
-    default: {
-      throw new Error(`Formato .${ext} no soportado. Soportados: GLB, GLTF, OBJ, STL, FBX, PLY, DAE.`);
-    }
+    default:
+      throw new Error(`Formato .${ext} no soportado.`);
   }
 
   // Normalizar la escena, asegurar cálculo de normales y sombras
@@ -103,6 +111,39 @@ export async function load3DModel(url, fileName = '') {
     stats,
     extension: ext
   };
+}
+
+/** Libera los recursos de GPU asignados por un modelo antes de cargar otro. */
+export function disposeModelResources(rootObject) {
+  if (!rootObject) return;
+
+  const disposedGeometries = new Set();
+  const disposedMaterials = new Set();
+  const disposedTextures = new Set();
+
+  const disposeTexture = (value) => {
+    if (value?.isTexture && !disposedTextures.has(value)) {
+      disposedTextures.add(value);
+      value.dispose();
+    }
+  };
+
+  rootObject.traverse((child) => {
+    if (child.geometry && !disposedGeometries.has(child.geometry)) {
+      disposedGeometries.add(child.geometry);
+      child.geometry.dispose();
+    }
+
+    const materials = child.material
+      ? (Array.isArray(child.material) ? child.material : [child.material])
+      : [];
+    materials.forEach((material) => {
+      if (!material || disposedMaterials.has(material)) return;
+      disposedMaterials.add(material);
+      Object.values(material).forEach(disposeTexture);
+      material.dispose();
+    });
+  });
 }
 
 function createDefaultPBRMaterial(colorHex, name = 'Material') {

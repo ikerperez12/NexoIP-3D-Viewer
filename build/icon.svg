@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">NexoIP 3D Viewer</title>
+  <desc id="desc">A luminous wireframe cube framed by amber and emerald viewfinder corners.</desc>
+  <defs>
+    <linearGradient id="panel" x1="72" y1="52" x2="448" y2="468" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171B22"/>
+      <stop offset="1" stop-color="#050607"/>
+    </linearGradient>
+    <linearGradient id="cube" x1="150" y1="144" x2="372" y2="374" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBBF24"/>
+      <stop offset="0.52" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="472" height="472" rx="112" fill="url(#panel)"/>
+  <rect x="26" y="26" width="460" height="460" rx="106" fill="none" stroke="#FFFFFF" stroke-opacity=".12" stroke-width="12"/>
+  <path d="M96 174V112a16 16 0 0 1 16-16h62M338 96h62a16 16 0 0 1 16 16v62M416 338v62a16 16 0 0 1-16 16h-62M174 416h-62a16 16 0 0 1-16-16v-62" fill="none" stroke="#F59E0B" stroke-linecap="round" stroke-width="24"/>
+  <path d="m256 132 112 62v124l-112 62-112-62V194l112-62Z" fill="#10151B" stroke="url(#cube)" stroke-linejoin="round" stroke-width="20"/>
+  <path d="m144 194 112 64 112-64M256 258v122" fill="none" stroke="url(#cube)" stroke-linejoin="round" stroke-width="18"/>
+  <circle cx="256" cy="258" r="13" fill="#F9FAFB"/>
+</svg>
