@@ -60,13 +60,16 @@ test('packaged app opens a local model and keeps its primary controls usable', a
     `--user-data-dir=${profileDirectory}`,
     '--disable-background-networking',
     '--disable-component-update',
+    '--use-angle=swiftshader',
+    '--enable-unsafe-swiftshader',
   ], {
     cwd: path.dirname(APP_PATH),
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: false,
+    windowsHide: true,
   });
   appProcess.stdout.on('data', (chunk) => processLogs.push(chunk.toString()));
   appProcess.stderr.on('data', (chunk) => processLogs.push(chunk.toString()));
+  appProcess.on('exit', (code, signal) => processLogs.push(`\n[process exited: code=${code}, signal=${signal}]\n`));
 
   let browser;
   try {
@@ -122,6 +125,9 @@ test('packaged app opens a local model and keeps its primary controls usable', a
     expect(initialFit.width).toBeGreaterThanOrEqual(1200);
     expect(initialFit.height).toBeGreaterThanOrEqual(780);
     expect(initialFit).toMatchObject({ canScrollX: false, canScrollY: false });
+
+    const pbrBounds = await appPage.getByRole('button', { name: 'PBR', exact: true }).boundingBox();
+    expect(pbrBounds?.width).toBeGreaterThan(35);
 
     const clippedAtLaunch = await appPage.evaluate(() => {
       const elements = document.querySelectorAll('header button, header select, aside');
@@ -203,6 +209,12 @@ test('packaged app opens a local model and keeps its primary controls usable', a
     expect(minimumFit.width).toBeGreaterThanOrEqual(860);
     expect(minimumFit.height).toBeGreaterThanOrEqual(540);
     expect(minimumFit).toMatchObject({ canScrollX: false, canScrollY: false, toolbarOverflow: false, clipped: [] });
+  } catch (error) {
+    await testInfo.attach('electron-process.log', {
+      body: Buffer.from(processLogs.join(''), 'utf8'),
+      contentType: 'text/plain',
+    });
+    throw error;
   } finally {
     await browser?.close().catch(() => undefined);
     stopProcessTree(appProcess);

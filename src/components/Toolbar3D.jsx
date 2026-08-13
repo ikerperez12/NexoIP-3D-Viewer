@@ -108,7 +108,7 @@ export default function Toolbar3D({
 
       {/* Centro: Modos de Renderizado y Iluminación de Focos */}
       <div role="toolbar" aria-label="Herramientas de visualización" className="glass-panel order-3 mx-auto flex max-w-full items-center gap-1.5 overflow-x-auto rounded-2xl px-3 py-1.5 shadow-2xl pointer-events-auto 2xl:order-none 2xl:mx-0 2xl:overflow-visible">
-        <div className="flex items-center gap-1 bg-black/50 p-1 rounded-xl">
+        <div className="flex shrink-0 items-center gap-1 bg-black/50 p-1 rounded-xl">
           {[
             { id: 'pbr', label: 'PBR', title: 'Texturas y Luces PBR' },
             { id: 'wireframe', label: 'Malla', title: 'Modo Malla de Alambre' },
@@ -122,7 +122,7 @@ export default function Toolbar3D({
               onClick={() => setRenderMode(mode.id)}
                 title={mode.title}
                 aria-pressed={renderMode === mode.id}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
+              className={`shrink-0 whitespace-nowrap px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
                 renderMode === mode.id
                   ? 'bg-amber-500 text-black font-extrabold shadow-lg shadow-amber-500/20'
                   : 'text-gray-300 hover:text-white hover:bg-white/10'
@@ -133,14 +133,14 @@ export default function Toolbar3D({
           ))}
         </div>
 
-        <div className="h-4 w-[1px] bg-white/10 mx-1" />
+        <div className="mx-1 h-4 w-[1px] shrink-0 bg-white/10" />
 
         {/* Desplegable de Focos e Iluminación */}
         <select
           aria-label="Iluminación y fondo de la escena"
           value={envPreset}
           onChange={(e) => setEnvPreset(e.target.value)}
-          className="bg-black/60 text-emerald-300 text-xs rounded-xl px-3 py-1.5 border border-emerald-500/40 outline-none hover:border-emerald-400 cursor-pointer font-semibold"
+          className="shrink-0 bg-black/60 text-emerald-300 text-xs rounded-xl px-3 py-1.5 border border-emerald-500/40 outline-none hover:border-emerald-400 cursor-pointer font-semibold"
           title="Focos de Iluminación y Fondos"
         >
           <option value="studio_pro">💡 Focos Pro + Negro Total</option>
@@ -151,7 +151,7 @@ export default function Toolbar3D({
           <option value="white">⚪ Estudio Blanco / Clay (CAD)</option>
         </select>
 
-        <div className="h-4 w-[1px] bg-white/10 mx-1" />
+        <div className="mx-1 h-4 w-[1px] shrink-0 bg-white/10" />
 
         <div className="hidden items-center gap-1 lg:flex">
           {[
@@ -173,12 +173,12 @@ export default function Toolbar3D({
           ))}
         </div>
 
-        <div className="h-4 w-[1px] bg-white/10 mx-1" />
+        <div className="mx-1 h-4 w-[1px] shrink-0 bg-white/10" />
 
         <button
           type="button"
           onClick={() => setIsOrthographic(!isOrthographic)}
-          className={`p-1.5 rounded-lg transition-all text-xs font-mono font-bold ${
+          className={`shrink-0 p-1.5 rounded-lg transition-all text-xs font-mono font-bold ${
             isOrthographic ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-500/50' : 'text-gray-400 hover:text-white'
           }`}
           title={isOrthographic ? "Cámara Ortográfica" : "Cámara Perspectiva"}
