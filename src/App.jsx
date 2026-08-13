@@ -110,11 +110,35 @@ export default function App() {
   useEffect(() => {
     if (!bridgeAvailable) return undefined;
     const startupTask = window.setTimeout(() => {
-      void loadCatalog();
+      void callNexoip('consumeStartupModel')
+        .then((registered) => {
+          if (registered?.id) {
+            setFilesList([registered]);
+            setCurrentFile(registered);
+            setModelData(null);
+            showToast(`Cargando ${registered.name}…`);
+            return loadCatalog();
+          }
+          return loadCatalog();
+        })
+        .catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo abrir el modelo de inicio.')));
       void refreshScanStatus().catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo consultar el escáner local.')));
     }, 0);
     return () => window.clearTimeout(startupTask);
-  }, [bridgeAvailable, loadCatalog, refreshScanStatus]);
+  }, [bridgeAvailable, loadCatalog, refreshScanStatus, showToast]);
+
+  useEffect(() => {
+    const bridge = getNexoipBridge();
+    if (!bridgeAvailable || typeof bridge?.onModelOpened !== 'function') return undefined;
+    bridge.onModelOpened((registered) => {
+      if (!registered?.id) return;
+      setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
+      setCurrentFile(registered);
+      setModelData(null);
+      showToast(`Cargando ${registered.name}…`);
+    });
+    return undefined;
+  }, [bridgeAvailable, showToast]);
 
   useEffect(() => {
     if (!bridgeAvailable || (!isScanning && !scanRequestPending)) return undefined;

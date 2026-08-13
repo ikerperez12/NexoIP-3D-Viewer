@@ -2,9 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import scannerModule from '../electron/file-scanner.js';
-
-const { FileScanner } = scannerModule;
+import { FileScanner } from '../electron/file-scanner.js';
 
 async function withTemporaryLibrary(callback) {
   const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'nexoip-scanner-'));

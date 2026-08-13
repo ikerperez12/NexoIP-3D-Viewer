@@ -24,6 +24,7 @@ Usa la [última release de GitHub](https://github.com/ikerperez12/NexoIP-3D-View
 - `*-portable.exe`: ejecutable independiente.
 - `SHA256SUMS.txt`: hashes para comprobar la integridad.
 - `*.cdx.json`: inventario CycloneDX de dependencias.
+- `THIRD_PARTY_NOTICES.txt`: licencias y atribuciones de los componentes incluidos.
 
 Los binarios actuales no tienen firma Authenticode y Windows puede mostrar SmartScreen. Comprueba siempre el SHA-256 antes de ejecutarlos:
 
@@ -58,13 +59,16 @@ Para generar instalador y portable:
 npm run dist:win
 ```
 
+`npm run test:e2e` empaqueta la aplicación, comprueba todos los fuses de Electron y ejecuta una prueba real del visor sobre Windows.
+
 Los binarios se generan en `release/`, pero no se versionan en Git. Las distribuciones oficiales se publican únicamente como assets de una GitHub Release.
 
 ## Límites conocidos
 
 - Solo se distribuye oficialmente para Windows x64.
-- Los recursos vinculados por OBJ, DAE o glTF deben estar junto al modelo aprobado y usar una extensión auxiliar permitida.
+- Los recursos vinculados que admita cada cargador deben estar junto al modelo aprobado y usar una extensión auxiliar permitida.
+- Las dimensiones se muestran en unidades propias del modelo (`u`), porque los formatos de origen no siempre definen una escala real.
 - Un archivo excesivamente grande o malformado puede rechazarse para proteger memoria y estabilidad.
 - Los ejecutables todavía no están firmados digitalmente.
 
-Licencia [MIT](../LICENSE). Copyright © 2026 IKER PEREZ.
+Licencia [MIT](../LICENSE). Los componentes incluidos conservan sus licencias y atribuciones en [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt). Copyright © 2026 Iker Perez / NexoIP.

@@ -29,7 +29,7 @@ export default function Toolbar3D({
   totalCount
 }) {
   return (
-    <header className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between pointer-events-none">
+    <header className="absolute left-4 right-4 top-4 z-20 flex flex-wrap items-start justify-between gap-y-2 pointer-events-none 2xl:flex-nowrap 2xl:items-center">
       {/* Lado Izquierdo: Menú + Navegación Siguiente/Anterior + Título */}
       <div className="flex items-center gap-2.5 pointer-events-auto">
         <button
@@ -88,7 +88,7 @@ export default function Toolbar3D({
 
         {/* Nombre e insignia del modelo */}
         {currentFile && (
-          <div className="glass-panel px-3.5 py-1.5 rounded-xl flex items-center gap-2.5 border border-white/10">
+          <div className="glass-panel hidden px-3.5 py-1.5 rounded-xl 2xl:flex items-center gap-2.5 border border-white/10">
             <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-extrabold uppercase badge-${currentFile.extension}`}>
               {currentFile.extension}
             </span>
@@ -107,7 +107,7 @@ export default function Toolbar3D({
       </div>
 
       {/* Centro: Modos de Renderizado y Iluminación de Focos */}
-      <div className="glass-panel px-3 py-1.5 rounded-2xl flex items-center gap-1.5 pointer-events-auto shadow-2xl">
+      <div role="toolbar" aria-label="Herramientas de visualización" className="glass-panel order-3 mx-auto flex max-w-full items-center gap-1.5 overflow-x-auto rounded-2xl px-3 py-1.5 shadow-2xl pointer-events-auto 2xl:order-none 2xl:mx-0 2xl:overflow-visible">
         <div className="flex items-center gap-1 bg-black/50 p-1 rounded-xl">
           {[
             { id: 'pbr', label: 'PBR', title: 'Texturas y Luces PBR' },
@@ -153,7 +153,7 @@ export default function Toolbar3D({
 
         <div className="h-4 w-[1px] bg-white/10 mx-1" />
 
-        <div className="flex items-center gap-1">
+        <div className="hidden items-center gap-1 lg:flex">
           {[
             { id: 'front', label: 'Frente' },
             { id: 'top', label: 'Top' },
@@ -263,7 +263,7 @@ export default function Toolbar3D({
           aria-expanded={inspectorOpen}
         >
           <Info size={18} className="text-purple-400" />
-          <span className="hidden md:inline">Propiedades</span>
+          <span className="hidden 2xl:inline">Propiedades</span>
         </button>
       </div>
     </header>

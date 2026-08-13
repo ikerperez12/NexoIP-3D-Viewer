@@ -221,7 +221,7 @@ export function extractModelStats(rootObject, animations = []) {
       x: Number(size.x.toFixed(3)),
       y: Number(size.y.toFixed(3)),
       z: Number(size.z.toFixed(3)),
-      unit: 'm'
+      unit: 'u'
     },
     center: {
       x: Number(center.x.toFixed(3)),

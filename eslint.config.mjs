@@ -38,7 +38,18 @@ export default [
     }
   },
   {
-    files: ['electron/**/*.{js,cjs}', 'scripts/**/*.cjs', 'tests/**/*.{js,cjs}'],
+    files: ['electron/**/*.js', 'tests/**/*.js', 'scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: globals.node
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }]
+    }
+  },
+  {
+    files: ['electron/**/*.cjs', 'scripts/**/*.cjs'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'commonjs',
@@ -49,9 +60,14 @@ export default [
     }
   },
   {
-    files: ['tests/**/*.test.js'],
+    files: ['playwright.config.mjs', 'tests/e2e/**/*.mjs'],
     languageOptions: {
-      sourceType: 'module'
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser }
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }]
     }
   }
 ];

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   getFileExtension,
   responseModelUrl,
   responseStatus,
   SUPPORTED_MODEL_EXTENSIONS
 } from '../src/utils/nexoip.js';
+import { extractModelStats } from '../src/utils/loaders.js';
 
 describe('renderer model utilities', () => {
   it('allows exactly the seven documented model formats', () => {
@@ -24,5 +26,13 @@ describe('renderer model utilities', () => {
     expect(responseModelUrl('nexoip://app/model/example/asset')).toBe('nexoip://app/model/example/asset');
     expect(responseModelUrl({ url: 'nexoip://app/model/example/asset' })).toBe('nexoip://app/model/example/asset');
     expect(responseModelUrl({ path: 'C:\\private\\model.glb' })).toBeNull();
+  });
+
+  it('reports dimensions in source-model units instead of assuming metres', () => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 3, 4));
+    const stats = extractModelStats(mesh);
+
+    expect(stats.dimensions).toEqual({ x: 2, y: 3, z: 4, unit: 'u' });
+    mesh.geometry.dispose();
   });
 });

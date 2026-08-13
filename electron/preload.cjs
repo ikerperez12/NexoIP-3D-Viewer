@@ -54,6 +54,18 @@ const nexoip = Object.freeze({
     return ipcRenderer.invoke('nexoip:get-scan-status');
   },
 
+  consumeStartupModel() {
+    return ipcRenderer.invoke('nexoip:consume-startup-model');
+  },
+
+  onModelOpened(callback) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('Model listener must be a function.');
+    }
+    ipcRenderer.removeAllListeners('nexoip:model-opened');
+    ipcRenderer.on('nexoip:model-opened', (_event, model) => callback(model));
+  },
+
   revealModel(id) {
     assertOpaqueId(id);
     return ipcRenderer.invoke('nexoip:reveal-model', id);

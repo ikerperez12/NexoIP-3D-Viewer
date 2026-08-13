@@ -15,7 +15,7 @@ export default function ModelInspector({
   if (!isOpen) return null;
 
   return (
-    <aside className="absolute top-20 right-4 bottom-4 w-80 md:w-96 z-20 glass-panel rounded-2xl flex flex-col overflow-hidden shadow-2xl animate-fade-in pointer-events-auto" aria-label="Propiedades del modelo">
+    <aside className="absolute bottom-4 right-4 top-32 z-20 flex w-72 flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel animate-fade-in pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Propiedades del modelo">
       {/* Header */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
         <div className="flex items-center gap-2">
@@ -110,15 +110,15 @@ export default function ModelInspector({
                   <div className="grid grid-cols-3 gap-2 text-center font-mono">
                     <div className="bg-amber-950/40 p-2 rounded-lg border border-amber-500/30">
                       <span className="text-[10px] text-amber-400 block">ANCHO (X)</span>
-                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.x} m</span>
+                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.x} {stats.dimensions.unit || 'u'}</span>
                     </div>
                     <div className="bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/30">
                       <span className="text-[10px] text-emerald-400 block">ALTO (Y)</span>
-                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.y} m</span>
+                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.y} {stats.dimensions.unit || 'u'}</span>
                     </div>
                     <div className="bg-cyan-950/40 p-2 rounded-lg border border-cyan-500/30">
                       <span className="text-[10px] text-cyan-400 block">PROF. (Z)</span>
-                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.z} m</span>
+                      <span className="text-sm font-semibold text-gray-200">{stats.dimensions.z} {stats.dimensions.unit || 'u'}</span>
                     </div>
                   </div>
                 </div>

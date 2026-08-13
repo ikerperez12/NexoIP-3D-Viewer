@@ -1,8 +1,6 @@
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import security from '../electron/security.js';
-
-const {
+import {
   DEV_RENDERER_URL,
   getAppAssetPath,
   getModelRoute,
@@ -11,7 +9,7 @@ const {
   isSafeRelativePath,
   normalizeDevRendererUrl,
   normalizeFilters,
-} = security;
+} from '../electron/security.js';
 
 test('development renderer URL is restricted to the expected loopback origin', () => {
   expect(normalizeDevRendererUrl('http://127.0.0.1:3000')).toBe(DEV_RENDERER_URL);

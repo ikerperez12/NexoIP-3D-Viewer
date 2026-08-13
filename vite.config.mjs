@@ -12,7 +12,8 @@ export default defineConfig({
       targets: [
         {
           src: 'node_modules/three/examples/jsm/libs/draco/*',
-          dest: 'draco'
+          dest: 'draco',
+          rename: { stripBase: true }
         }
       ]
     })

@@ -22,6 +22,8 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
+![NexoIP 3D Viewer inspecting a local model](.github/assets/nexoip-3d-viewer.png)
+
 ## What it does
 
 NexoIP 3D Viewer opens and inspects `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae` files without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app.
@@ -45,6 +47,7 @@ Download the installer or portable build from the [latest GitHub Release](https:
 | `NexoIP-3D-Viewer-*-windows-x64-portable.exe` | Standalone executable; no installation |
 | `SHA256SUMS.txt` | Integrity hashes for release assets |
 | `*.cdx.json` | CycloneDX software bill of materials |
+| `THIRD_PARTY_NOTICES.txt` | Licenses and attribution for bundled components |
 
 The current Windows binaries are not Authenticode-signed. Windows may therefore show a SmartScreen warning. Verify the SHA-256 checksum before running a download; source and GitHub Actions build provenance are attached to each release. Code signing is planned, but it requires a trusted signing certificate.
 
@@ -104,12 +107,16 @@ npm run lint
 npm test
 npm run build
 npm audit --audit-level=high
+npm run test:e2e
 ```
+
+The packaged smoke test also verifies every Electron 43 fuse explicitly and fails if a future runtime adds an unreviewed fuse.
 
 ## Known limitations
 
 - Windows x64 is the only supported release target today.
-- Linked resources in OBJ, DAE, and glTF files must live beside the approved model and use supported local sidecar formats.
+- Linked resources supported by a format loader must live beside the approved model and use an allowlisted local sidecar format.
+- Dimensions are reported in the model's own unit (`u`); source formats do not always define a real-world scale.
 - Very large or malformed assets may be rejected to protect responsiveness and memory usage.
 - Release binaries are currently unsigned; see the download warning above.
 
@@ -117,4 +124,4 @@ npm audit --audit-level=high
 
 Please read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Security problems belong in a private report, not a public issue.
 
-Released under the [MIT License](LICENSE). Copyright © 2026 IKER PEREZ.
+Released under the [MIT License](LICENSE). Bundled components retain their licenses and attribution in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). Copyright © 2026 Iker Perez / NexoIP.

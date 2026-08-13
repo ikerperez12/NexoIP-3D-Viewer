@@ -62,7 +62,7 @@ export default function FileLibrarySidebar({
   const totalCached = scanStatus?.totalCached ?? scanStatus?.foundFiles ?? files.length;
 
   return (
-    <aside className="absolute bottom-4 left-4 top-20 z-20 flex w-80 flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel pointer-events-auto md:w-96" aria-label="Biblioteca de modelos locales">
+    <aside className="absolute bottom-4 left-4 top-32 z-20 flex w-72 flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Biblioteca de modelos locales">
       <div className="flex items-center justify-between border-b border-white/10 bg-black/40 p-4">
         <div className="flex items-center gap-2">
           <HardDrive size={18} aria-hidden="true" className="text-amber-400" />
@@ -116,7 +116,7 @@ export default function FileLibrarySidebar({
           <Search size={15} aria-hidden="true" className="text-emerald-300" />
           <input id="model-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por nombre…" className="w-full bg-transparent text-xs text-white outline-none placeholder:text-gray-400" />
         </div>
-        <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Filtrar por formato">
+        <div className="mt-2 flex flex-wrap gap-1" aria-label="Filtrar por formato">
           {['all', ...SUPPORTED_MODEL_EXTENSIONS].map((extension) => {
             const label = extension === 'all' ? 'Todos' : `.${extension.toUpperCase()}`;
             return <button type="button" key={extension} onClick={() => setSelectedExt(extension)} aria-pressed={selectedExt === extension} className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-mono font-bold ${selectedExt === extension ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/60' : 'bg-white/5 text-gray-300 hover:bg-white/10'}`}>{label}</button>;

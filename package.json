@@ -1,62 +1,136 @@
 {
   "name": "nexoip-3d-viewer",
   "version": "1.0.0",
-  "description": "Visor 3D nativo de escritorio y escáner masivo de archivos para Windows (.GLB, .GLTF, .OBJ, .STL, .FBX, .PLY, .DAE)",
-  "author": "NexoIP",
+  "description": "A private, offline-first 3D model viewer and library for Windows.",
+  "author": {
+    "name": "Iker Perez",
+    "url": "https://github.com/ikerperez12"
+  },
   "license": "MIT",
-  "private": false,
+  "private": true,
   "type": "module",
   "main": "electron/main.js",
-  "homepage": "./",
+  "homepage": "https://github.com/ikerperez12/NexoIP-3D-Viewer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikerperez12/NexoIP-3D-Viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ikerperez12/NexoIP-3D-Viewer/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "dev": "concurrently \"node server/index.js\" \"node node_modules/vite/bin/vite.js\"",
-    "build": "node node_modules/vite/bin/vite.js build",
-    "preview": "node node_modules/vite/bin/vite.js preview",
-    "server": "node server/index.js",
-    "electron": "concurrently \"node server/index.js\" \"node node_modules/vite/bin/vite.js\" \"electron .\"",
-    "dist": "npm run build && electron-builder --win portable nsis"
+    "dev": "concurrently --kill-others-on-fail \"vite\" \"wait-on http-get://127.0.0.1:3000 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:3000 electron .\"",
+    "electron": "npm run dev",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npm run pack:win && npm run verify:fuses && playwright test",
+    "test:e2e:run": "npm run verify:fuses && playwright test",
+    "verify:fuses": "node scripts/verify-fuses.mjs",
+    "check": "npm run lint && npm run test && npm run build && npm audit --audit-level=high",
+    "pack:win": "npm run build && electron-builder --win dir --x64",
+    "dist:win": "npm run build && electron-builder --win nsis portable --x64",
+    "dist": "npm run dist:win",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "clsx": "^2.1.1",
-    "concurrently": "^8.2.2",
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "fast-glob": "^3.3.3",
-    "lucide-react": "^0.395.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "three": "^0.165.0"
+    "@fontsource/inter": "5.3.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "lucide-react": "0.395.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "0.165.0"
   },
   "devDependencies": {
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@types/three": "^0.165.0",
-    "@vitejs/plugin-react": "^4.3.0",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3",
-    "vite": "^5.2.13"
+    "@electron/fuses": "2.1.3",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "concurrently": "10.0.4",
+    "cross-env": "10.1.0",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "eslint": "10.8.1",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.4",
+    "globals": "17.11.0",
+    "tailwindcss": "4.3.3",
+    "vite": "8.2.1",
+    "vite-plugin-static-copy": "4.1.1",
+    "vitest": "4.1.10",
+    "wait-on": "9.1.0"
   },
   "build": {
     "appId": "com.nexoip.viewer3d",
     "productName": "NexoIP 3D Viewer",
+    "copyright": "Copyright © 2026 Iker Perez / NexoIP",
+    "asar": true,
+    "compression": "maximum",
+    "npmRebuild": false,
+    "electronLanguages": [
+      "en",
+      "es"
+    ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
-      "server/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.txt",
+      "!node_modules{,/**/*}"
     ],
+    "extraResources": [
+      "THIRD_PARTY_NOTICES.txt"
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "win": {
+      "icon": "build/icon.svg",
       "target": [
-        "portable",
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
+      "artifactName": "NexoIP-3D-Viewer-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NexoIP 3D Viewer"
+    },
+    "portable": {
+      "artifactName": "NexoIP-3D-Viewer-${version}-windows-${arch}-portable.${ext}",
+      "requestExecutionLevel": "user"
     }
   }
 }

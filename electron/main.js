@@ -1,8 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { fork } from 'node:child_process';
-import http from 'node:http';
 import { FileScanner } from './file-scanner.js';
 import {
   DEV_RENDERER_URL,
@@ -35,25 +33,26 @@ const DIST_DIRECTORY = path.join(__dirname, '..', 'dist');
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
 
 let mainWindow = null;
-let serverProcess = null;
+const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
+let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
 
-function startBackendServer() {
-  const req = http.get('http://127.0.0.1:3001/api/files', () => {
-    console.log('[Electron] Servidor backend activo detectado.');
-  });
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
 
-  req.on('error', () => {
-    console.log('[Electron] Iniciando servidor backend embebido...');
-    const serverPath = path.join(__dirname, '../server/index.js');
-    try {
-      serverProcess = fork(serverPath, [], {
-        stdio: 'inherit',
-        env: { ...process.env, PORT: '3001' }
-      });
-    } catch (e) {
-      console.error('[Electron] Error iniciando servidor backend embebido:', e);
-    }
-  });
+async function openModelFromCommandLine(candidatePath) {
+  if (!candidatePath || !path.isAbsolute(candidatePath)) return;
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoadingMainFrame()) {
+    pendingStartupPath = candidatePath;
+    return;
+  }
+
+  try {
+    const model = await scanner.registerDroppedPath(candidatePath);
+    mainWindow.webContents.send('nexoip:model-opened', model);
+  } catch {
+    // Invalid, missing, oversized, and unsupported arguments are ignored safely.
+  }
 }
 
 function createErrorResponse(status, message) {
@@ -128,6 +127,12 @@ function registerIpcHandlers() {
   registerIpcHandler('nexoip:list-models', (filters) => scanner.listModels(normalizeFilters(filters)));
   registerIpcHandler('nexoip:get-tree', () => scanner.getTree());
   registerIpcHandler('nexoip:get-scan-status', () => scanner.getStatus());
+  registerIpcHandler('nexoip:consume-startup-model', async () => {
+    if (!pendingStartupPath) return null;
+    const startupPath = pendingStartupPath;
+    pendingStartupPath = null;
+    return scanner.registerDroppedPath(startupPath);
+  });
 
   registerIpcHandler('nexoip:scan', async () => {
     const selection = await dialog.showOpenDialog(mainWindow, {
@@ -184,7 +189,7 @@ function configureSession() {
         responseHeaders: {
           ...details.responseHeaders,
           'Content-Security-Policy': [
-            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'",
+            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:",
           ],
           'Permissions-Policy': ['camera=(), geolocation=(), microphone=(), payment=(), usb=()'],
           'Referrer-Policy': ['no-referrer'],
@@ -210,8 +215,6 @@ function hardenWindow(webContents) {
 }
 
 async function createWindow() {
-  startBackendServer();
-
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
@@ -249,9 +252,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -260,5 +260,14 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     void createWindow();
+  }
+});
+
+app.on('second-instance', (_event, commandLine) => {
+  const candidate = commandLine.find((argument, index) => index > 0 && path.isAbsolute(argument));
+  if (candidate) void openModelFromCommandLine(candidate);
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   }
 });

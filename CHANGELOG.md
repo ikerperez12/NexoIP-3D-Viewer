@@ -13,12 +13,14 @@ All notable changes are documented here. This project follows [Semantic Versioni
 - Geometry, hierarchy, material, and animation inspection.
 - Lighting, render, camera, export, and snapshot tools.
 - Automated checks, security scanning, SBOM, checksums, and release provenance.
+- Packaged third-party notices for bundled fonts, renderer libraries, and Draco.
 
 ### Security
 
 - Replaced the embedded HTTP server with a sandboxed Electron capability bridge.
 - Removed automatic disk scanning, open CORS, arbitrary path reads, and shell command execution.
 - Added opaque model IDs, path containment, symlink checks, strict navigation controls, a local CSP, and hardened Electron fuses.
+- Added a release gate that verifies all nine Electron 43 fuses before packaged tests or publication.
 - Updated the runtime and build dependencies to versions with no known npm audit findings at release time.
 
 [Unreleased]: https://github.com/ikerperez12/NexoIP-3D-Viewer/compare/v1.0.0...HEAD

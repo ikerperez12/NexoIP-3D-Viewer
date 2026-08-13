@@ -17,6 +17,7 @@ release/
 .env
 .env.*
 !.env.example
+.envrc
 .npmrc.local
 *.pem
 *.key
@@ -24,6 +25,11 @@ release/
 *.pfx
 *.cer
 *.crt
+*.db
+*.sqlite
+*.sqlite-*
+*.bak
+*.dump
 
 # Logs and local tooling
 *.log
