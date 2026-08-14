@@ -12,6 +12,18 @@ Runtime components
   Copyright (c) Facebook, Inc. and its affiliates.
   https://react.dev/
 
+- React scheduler 0.23.2 - MIT License
+  Copyright (c) Facebook, Inc. and its affiliates.
+  https://www.npmjs.com/package/scheduler
+
+- loose-envify 1.4.0 - MIT License
+  Copyright (c) 2015 Andres Suarez <zertosh@gmail.com>.
+  https://www.npmjs.com/package/loose-envify
+
+- js-tokens 4.0.0 - MIT License
+  Copyright (c) 2014-2018 Simon Lydell.
+  https://www.npmjs.com/package/js-tokens
+
 - Three.js 0.165.0 - MIT License
   Copyright (c) 2010-2024 three.js authors.
   https://threejs.org/
@@ -41,12 +53,37 @@ Runtime components
   Copyright (c) 2016-2022 Arseny Kapoulkine.
   https://github.com/zeux/meshoptimizer
 
+Test fixture attribution
+------------------------
+
+- `tests/fixtures/nexoip-sample.stl` is an original, synthetic NexoIP test
+  fixture covered by the repository's root MIT license; it contains no
+  third-party geometry. See `tests/fixtures/README.md`.
+
+- Khronos glTF Sample Assets - format-matrix fixtures
+  `tests/fixtures/format-matrix/draco-required/Box.gltf` and `Box.bin` are
+  unmodified copies of the Box glTF-Draco asset from
+  https://github.com/KhronosGroup/glTF-Sample-Assets/tree/2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf/Models/Box/glTF-Draco
+  Copyright 2017 Cesium. Licensed under CC BY 4.0 International:
+  https://creativecommons.org/licenses/by/4.0/
+
+  Other format-matrix fixture provenance and licensing is recorded next to
+  the assets in `tests/fixtures/format-matrix/ATTRIBUTION.md`; these fixtures
+  are test-only and are not included in Electron production packages.
+
+- Khronos KTX-Software - format-matrix KTX2 fixture
+  `tests/fixtures/format-matrix/ktx2-required/basis-texture.ktx2` is an
+  unmodified test resource at commit 31145d1beb8fe09e4e75005c9a31ecdf3df2bb75,
+  SHA-256 15913638d6d882c41bde2021443d1f0a83de29adb294dcb835fd4618baf19780.
+  Apache License 2.0; https://github.com/KhronosGroup/KTX-Software
+
 Electron packages also include LICENSE.electron.txt and
 LICENSES.chromium.html alongside the executable.
 
 
-MIT License (React, React DOM, Three.js, and meshoptimizer)
------------------------------------------------------------
+MIT License (React, React DOM, scheduler, loose-envify, js-tokens,
+Three.js, and meshoptimizer)
+--------------------------------------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach, expect, test } from 'vitest';
-import { loadPackagedSelfTestConfig } from '../electron/packaged-self-test.js';
+import { loadPackagedSelfTestConfig, runPackagedSelfTest } from '../electron/packaged-self-test.js';
 
 const temporaryDirectories = [];
 
@@ -83,4 +84,28 @@ test('packaged self-test rejects result paths outside the capability directory',
     configPath: capability.configPath,
     tokenDigest: capability.tokenDigest,
   })).rejects.toThrow('configuration is invalid');
+});
+
+test('packaged self-test fails closed when it cannot control the minimum accessibility viewport', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const fixtureStats = await fs.promises.stat(fixturePath);
+  const model = {
+    id: 'a'.repeat(48),
+    name: path.basename(fixturePath),
+    size: fixtureStats.size,
+  };
+  const report = await runPackagedSelfTest({
+    config: { fixturePath, resultPath: path.join(os.tmpdir(), 'result-a1.json') },
+    scanner: {
+      registerDroppedPath: async () => model,
+      openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),
+    },
+    renderer: {
+      getURL: () => 'nexoip://app/',
+      getTitle: () => 'NexoIP 3D Viewer',
+    },
+  });
+
+  expect(report.status).toBe('failed');
+  expect(report.error).toContain('minimum accessibility viewport');
 });

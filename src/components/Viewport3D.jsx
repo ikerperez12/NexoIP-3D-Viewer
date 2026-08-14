@@ -15,6 +15,20 @@ function revokeBlobUrl(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);
 }
 
+function updateCameraEvidence(element, camera, controls) {
+  if (!element || !camera || !controls) return '';
+  const values = [
+    ...camera.position.toArray(),
+    ...controls.target.toArray(),
+    camera.zoom,
+  ];
+  const snapshot = values
+    .map((value) => (Number.isFinite(value) ? value.toFixed(8) : 'invalid'))
+    .join(',');
+  element.dataset.cameraState = snapshot;
+  return snapshot;
+}
+
 function safeDownloadName(fileName) {
   return String(fileName || 'captura').replace(/[^a-z0-9._-]+/gi, '_');
 }
@@ -237,8 +251,17 @@ export default function Viewport3D({
     scene.background = new THREE.Color(0x000000);
     sceneRef.current = scene;
 
-    const width = Math.max(container.clientWidth, 1);
-    const height = Math.max(container.clientHeight, 1);
+    // clientWidth/clientHeight stay in the unzoomed layout coordinate space in
+    // Electron. The rendered box is the reliable size at browser zoom, so it
+    // prevents the WebGL canvas from expanding beyond the accessible viewport.
+    const getContainerSize = () => {
+      const bounds = container.getBoundingClientRect();
+      return {
+        width: Math.max(Math.floor(bounds.width), 1),
+        height: Math.max(Math.floor(bounds.height), 1),
+      };
+    };
+    const { width, height } = getContainerSize();
     const perspectiveCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     const orthographicCamera = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 1000);
     orthographicCamera.userData.viewSize = 10;
@@ -250,8 +273,11 @@ export default function Viewport3D({
     cameraRef.current = perspectiveCamera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(width, height, false);
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -266,6 +292,7 @@ export default function Viewport3D({
     controls.maxPolarAngle = Math.PI;
     controlsRef.current = controls;
     controls.listenToKeyEvents(container);
+    updateCameraEvidence(container, perspectiveCamera, controls);
 
     const lights = new THREE.Group();
     scene.add(lights);
@@ -309,8 +336,7 @@ export default function Viewport3D({
       }
     };
     const resize = () => {
-      const nextWidth = Math.max(container.clientWidth, 1);
-      const nextHeight = Math.max(container.clientHeight, 1);
+      const { width: nextWidth, height: nextHeight } = getContainerSize();
       perspectiveCamera.aspect = nextWidth / nextHeight;
       perspectiveCamera.updateProjectionMatrix();
       updateOrthographicFrustum(orthographicCamera, nextWidth, nextHeight);
@@ -377,6 +403,7 @@ export default function Viewport3D({
     cameraRef.current = nextCamera;
     nextCamera.lookAt(controls.target);
     controls.update();
+    updateCameraEvidence(containerRef.current, nextCamera, controls);
   }, [isOrthographic]);
 
   useEffect(() => {
@@ -518,12 +545,15 @@ export default function Viewport3D({
     if (cameraPresetRequest.preset === 'iso') camera.position.set(target.x + distance, target.y + distance, target.z + distance);
     camera.lookAt(target);
     controlsRef.current.update();
+    updateCameraEvidence(containerRef.current, camera, controlsRef.current);
   }, [cameraPresetRequest]);
 
   useEffect(() => {
     if (!cameraControlRequest || !cameraRef.current || !controlsRef.current) return;
     const action = typeof cameraControlRequest.action === 'string' ? cameraControlRequest.action : '';
-    applyCameraAction(cameraRef.current, controlsRef.current, action);
+    if (applyCameraAction(cameraRef.current, controlsRef.current, action)) {
+      updateCameraEvidence(containerRef.current, cameraRef.current, controlsRef.current);
+    }
   }, [cameraControlRequest]);
 
   useEffect(() => {
@@ -628,7 +658,10 @@ export default function Viewport3D({
           }[event.key];
           if (!direction) return;
           const action = `${event.shiftKey ? 'orbit' : 'pan'}-${direction}`;
-          if (applyCameraAction(cameraRef.current, controlsRef.current, action)) event.preventDefault();
+          if (applyCameraAction(cameraRef.current, controlsRef.current, action)) {
+            updateCameraEvidence(containerRef.current, cameraRef.current, controlsRef.current);
+            event.preventDefault();
+          }
         }}
       />
       <p id="viewport-keyboard-help" className="sr-only">Usa las flechas para desplazar la cámara y Mayús más flechas para orbitar. Utiliza los controles de cámara para acercar o alejar.</p>

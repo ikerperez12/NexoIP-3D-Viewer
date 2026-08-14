@@ -63,9 +63,11 @@ npm run dist:win
 npm run test:release-artifacts
 ```
 
-`npm run test:release-artifacts` instala el paquete NSIS en un directorio temporal aislado, ejecuta el contrato seguro de la aplicación, lo desinstala y valida el portable.
+`npm run test:release-artifacts` se niega a ejecutarse si detecta una instalación previa de NexoIP, instala NSIS de forma silenciosa en directorios temporales únicos dentro del perfil anfitrión protegido, ejecuta el contrato seguro, elimina el estado que ha creado y valida el portable. No sustituye una prueba posterior sobre perfiles Windows limpios.
 
-`npm run test:e2e` y `npm run test:smoke:ci` comprueban todos los fuses de Electron, demuestran que el ejecutable distribuido rechaza transportes de depuración, inician el paquete real sin CDP, ejercitan el bridge preload y el protocolo privado de modelos `nexoip://`, y verifican los cuatro runtimes Draco/Basis incluidos. Las pruebas unitarias parsean además pequeños activos reales glTF, OBJ/MTL, STL y PLY, y validan el round-trip de un GLB animado.
+`npm run test:e2e` y `npm run test:smoke:ci` comprueban todos los fuses de Electron, demuestran que el ejecutable distribuido rechaza transportes de depuración, inician el paquete real sin CDP, ejercitan el bridge preload y el protocolo privado de modelos `nexoip://`, y verifican los cuatro runtimes Draco/Basis incluidos. El self-test empaquetado recoge además evidencia dirigida con ventana 900x600 y zoom del navegador al 200%: acciones esenciales visibles, ausencia de desbordamiento global y alternativas de cámara por teclado. Es una regresión concreta, no una declaración de conformidad WCAG.
+
+Las pruebas unitarias usan un corpus redistribuible fijado por SHA-256 para glTF con recursos externos, `EXT_meshopt_compression` obligatorio, OBJ con varias bibliotecas MTL y texturas, DAE con escala/ejes/textura/animación, FBX estático, cableado Draco/KTX2, STL y PLY. La procedencia de cada fixture está documentada junto al corpus; la decodificación Draco/KTX2 dentro del paquete real y la matriz completa de siete formatos siguen pendientes para la versión estable.
 
 Los binarios se generan en `release/`, pero no se versionan en Git. Las distribuciones oficiales se publican únicamente como assets de una GitHub Release.
 
@@ -73,7 +75,7 @@ Los binarios se generan en `release/`, pero no se versionan en Git. Las distribu
 
 - Solo se distribuye oficialmente para Windows x64.
 - `v1.0.0` es una vista previa alpha; todavía no existe una release estable soportada.
-- FBX, DAE, glTF comprimido y OBJ con texturas aún necesitan una matriz completa de fixtures dentro de la aplicación empaquetada.
+- La matriz unitaria ya cubre FBX estático, DAE animado/texturizado, Meshopt real y OBJ multi-MTL con texturas; la matriz completa dentro de la aplicación empaquetada, incluida decodificación Draco/KTX2, sigue pendiente.
 - Los recursos vinculados que admita cada cargador deben estar junto al modelo aprobado y usar una extensión auxiliar permitida.
 - Las dimensiones se muestran en unidades propias del modelo (`u`), porque los formatos de origen no siempre definen una escala real.
 - Un archivo excesivamente grande o malformado puede rechazarse para proteger memoria y estabilidad.

@@ -1,0 +1,16 @@
+# Authored NexoIP fixture: two material libraries and two texture sidecars.
+mtllib warm.mtl
+mtllib cool.mtl
+o TwoMaterialTriangles
+v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+vt 1 1
+usemtl WarmTexture
+f 1/1 2/2 3/3
+usemtl CoolTexture
+f 2/2 4/4 3/3

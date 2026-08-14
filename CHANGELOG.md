@@ -16,10 +16,11 @@ All notable changes are documented here. This project follows [Semantic Versioni
 - Production binaries reject debugging and sandbox-bypass startup flags before creating a window.
 - Model assets are served from identity-verified open handles with safe MIME types and no check-then-reopen race.
 - Release publication now requires protected-main provenance, manual `production-signing` approval, timestamped publisher signatures, an Electron runtime inventory, SBOM, checksums, and attestations.
+- Stable publication rejects prerelease version strings and any tag that already owns a GitHub Release; high-risk runtime and toolchain upgrades are kept out of grouped Dependabot updates.
 
 ### Tests
 
-- Added real parser fixtures for glTF, OBJ/MTL, STL, and PLY; animated GLB round-trip coverage; scan cancellation and registry bounds; protocol HEAD cleanup; startup-policy negatives; a no-CDP packaged self-test; and isolated NSIS install/uninstall plus portable-artifact smoke coverage.
+- Added a SHA-256-pinned redistributable loader matrix for external glTF, required EXT Meshopt, textured multi-MTL OBJ, textured/animated DAE, static FBX, Draco/KTX2 wiring, STL and PLY; animated GLB round-trip coverage; scan cancellation and registry bounds; protocol HEAD cleanup; startup-policy negatives; a no-CDP packaged self-test with targeted 900x600/200% accessibility evidence; and guarded NSIS install/uninstall plus portable-artifact smoke coverage.
 
 ## [1.0.0] - 2026-08-13 (alpha technical preview)
 

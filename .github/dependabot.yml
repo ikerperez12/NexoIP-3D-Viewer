@@ -9,10 +9,31 @@ updates:
       timezone: Europe/Madrid
     open-pull-requests-limit: 5
     groups:
-      production-dependencies:
+      react-runtime:
+        applies-to: version-updates
+        patterns:
+          - react
+          - react-dom
+      production-minor-and-patch:
+        applies-to: version-updates
         dependency-type: production
-      development-dependencies:
+        exclude-patterns:
+          - three
+        update-types:
+          - minor
+          - patch
+      development-minor-and-patch:
+        applies-to: version-updates
         dependency-type: development
+        exclude-patterns:
+          - '@electron/*'
+          - electron
+          - electron-builder
+          - vite
+          - '@vitejs/*'
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /

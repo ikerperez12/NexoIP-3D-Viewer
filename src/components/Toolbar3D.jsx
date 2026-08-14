@@ -186,7 +186,7 @@ export default function Toolbar3D({
             <span className="hidden 2xl:inline">Cámara</span>
           </button>
           {cameraMenuOpen && (
-            <div id={cameraMenuId} role="group" aria-label="Controles precisos de cámara" className="absolute right-0 top-full mt-2 w-56 rounded-2xl border border-cyan-400/50 bg-black/95 p-2 shadow-2xl glass-panel">
+            <div id={cameraMenuId} role="group" aria-label="Controles precisos de cámara" className="absolute right-0 top-full mt-2 max-h-[calc(100vh-8rem)] w-56 overflow-y-auto rounded-2xl border border-cyan-400/50 bg-black/95 p-2 shadow-2xl glass-panel">
               <p className="px-1 pb-1 text-[11px] text-gray-200">Orbita, desplaza o ajusta el zoom sin usar arrastre.</p>
               <CameraControlGroup label="Orbitar" actions={CAMERA_ACTIONS.slice(0, 4)} onCameraControl={onCameraControl} />
               <CameraControlGroup label="Desplazar" actions={CAMERA_ACTIONS.slice(4, 8)} onCameraControl={onCameraControl} />

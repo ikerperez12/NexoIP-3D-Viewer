@@ -31,7 +31,7 @@
 
 NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app.
 
-The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`, but support is not yet uniform. Draco, Meshopt and KTX2 are wired for glTF; adjacent OBJ/MTL files, STL colours, and PLY meshes or point clouds are supported. Compressed glTF, textured OBJ, FBX and DAE still lack a release-grade packaged fixture matrix. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
+The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`, but support is not yet uniform. The source-level loader matrix now covers external glTF buffers and textures, required `EXT_meshopt_compression`, textured multi-MTL OBJ, centimetre/Z-up textured and animated DAE, static FBX, STL colours, and PLY meshes or point clouds. Pinned Draco and KTX2 fixtures also verify manifests, sidecar integrity, and bundled runtime wiring; real packaged Draco/KTX2 decoding and the complete seven-format packaged matrix remain stable-release gates. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
 
 - PBR, wireframe, normals, X-ray, and unlit render modes.
 - Perspective and orthographic cameras, standard views, grid, axes, auto-rotation, and camera reset.
@@ -119,7 +119,9 @@ npm run dist:win
 npm run test:release-artifacts
 ```
 
-`npm run test:e2e` and the hosted `npm run test:smoke:ci` gate verify every Electron 43 fuse, prove that the distributed executable rejects debugging transports, start the real packaged application without CDP, exercise the preload bridge and private `nexoip://` model protocol, and verify the four bundled Draco/Basis runtimes. After `npm run dist:win`, `npm run test:release-artifacts` silently installs the NSIS package into an isolated temporary directory, runs the same capability checks, uninstalls it and exercises the portable executable. Loader unit tests separately parse small real glTF, OBJ/MTL, STL and PLY fixtures and round-trip an animated GLB.
+`npm run test:e2e` and the hosted `npm run test:smoke:ci` gate verify every Electron 43 fuse, prove that the distributed executable rejects debugging transports, start the real packaged application without CDP, exercise the preload bridge and private `nexoip://` model protocol, and verify the four bundled Draco/Basis runtimes. The packaged self-test also records targeted evidence at a 900x600 window and 200% browser zoom: essential actions remain reachable, global overflow is absent, and the discrete camera keyboard alternatives respond. This is a focused regression gate, not a WCAG conformance claim.
+
+After `npm run dist:win`, `npm run test:release-artifacts` refuses to run when it detects an existing NexoIP installation state, silently installs NSIS into unique temporary install and data directories on the guarded host profile, runs the same capability checks, removes the state it created, and exercises the portable executable. Loader unit tests use a redistributable, SHA-256-pinned corpus for external glTF, required EXT Meshopt, textured multi-MTL OBJ, textured/animated DAE, static FBX, Draco/KTX2 wiring, STL and PLY; fixture provenance is recorded beside the corpus.
 
 These are alpha baseline checks. They do not yet prove the full seven-format matrix in the packaged application, WCAG 2.2 AA at Windows scaling extremes, long-running GPU stability, a clean Windows 10/11 test matrix, or Authenticode identity. The additional required evidence is tracked in [Product readiness](docs/PRODUCT_READINESS.md).
 
