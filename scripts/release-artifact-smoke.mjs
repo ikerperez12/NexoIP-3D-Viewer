@@ -5,13 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIRECTORY = path.dirname(SCRIPT_PATH);
 const REPOSITORY_DIRECTORY = path.resolve(SCRIPT_DIRECTORY, '..');
 const RELEASE_DIRECTORY = path.join(REPOSITORY_DIRECTORY, 'release');
 const FIXTURE_PATH = path.join(REPOSITORY_DIRECTORY, 'tests', 'fixtures', 'nexoip-sample.stl');
 const DIAGNOSTICS_DIRECTORY = path.join(REPOSITORY_DIRECTORY, 'test-results');
 const TEMPORARY_ROOT_PREFIX = 'nexoip-release-artifact-smoke-';
-const SELF_TEST_TIMEOUT_MS = 25_000;
+const SELF_TEST_TIMEOUT_MS = 60_000;
 const INSTALLER_TIMEOUT_MS = 90_000;
 const UNINSTALLER_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 15_000;
@@ -22,6 +23,45 @@ const diagnosticEvents = [];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function assertAccessibilityResponsiveEvidence(report, artifactLabel) {
+  const evidence = report.checks?.accessibilityResponsive;
+  assert(evidence?.scope?.claim === 'targeted packaged accessibility and responsive evidence',
+    `${artifactLabel} did not state its targeted accessibility evidence scope.`);
+  assert(typeof evidence?.scope?.limitations === 'string' && evidence.scope.limitations.includes('not a complete WCAG conformance'),
+    `${artifactLabel} did not record the accessibility evidence limitation.`);
+  assert(evidence?.viewport?.actualWindow?.width === 900 && evidence.viewport.actualWindow.height === 600,
+    `${artifactLabel} did not run the minimum 900x600 accessibility viewport.`);
+  assert(evidence.viewport.requestedZoomFactor === 2 && evidence.viewport.actualZoomFactor === 2,
+    `${artifactLabel} did not run at 200% zoom.`);
+  assert(evidence?.globalOverflow?.horizontal === false && evidence.globalOverflow.vertical === false
+    && evidence.globalOverflow.toleranceCssPixels === 1
+    && evidence.globalOverflow.allEssentialActionsInsideViewport === true,
+  `${artifactLabel} reported global overflow or a hidden essential action.`);
+  for (const action of ['openLocal', 'library', 'camera']) {
+    const result = evidence?.essentialActions?.[action];
+    assert(result?.visible === true && result.insideViewport === true && result.focusable === true,
+      `${artifactLabel} did not expose the ${action} action.`);
+  }
+  assert(evidence.essentialActions.openLocal.enabled === true && evidence.essentialActions.openLocal.controlsNativeFileInput === true,
+    `${artifactLabel} local-open action was not enabled and connected to its native file input.`);
+  assert(evidence.essentialActions.library.toggles === true && evidence.essentialActions.camera.toggles === true
+    && evidence.essentialActions.camera.menuInsideViewport === true && evidence.essentialActions.camera.menuScrollable === true
+    && evidence.essentialActions.camera.menuOverflowYScrollable === true,
+    `${artifactLabel} library or camera action was not operable.`);
+  assert(evidence?.semantics?.main === true && evidence.semantics.tabs?.valid === true
+    && evidence.semantics.tabs.count >= 2 && evidence.semantics.tabs.arrowNavigation === true
+    && evidence.semantics.dialog?.valid === true && evidence.semantics.liveRegions?.valid === true
+    && evidence.semantics.liveRegions.count >= 1,
+  `${artifactLabel} accessibility semantics were incomplete.`);
+  assert(evidence?.keyboard?.viewportFocused === true && evidence.keyboard.arrowsHandled === true
+    && evidence.keyboard.arrowsMovedCamera === true && evidence.keyboard.shiftArrowsHandled === true
+    && evidence.keyboard.shiftArrowsMovedCamera === true,
+  `${artifactLabel} viewport keyboard controls did not move the camera for Arrow/Shift+Arrow.`);
+  assert(Number.isFinite(evidence?.restoredWindow?.width) && Number.isFinite(evidence?.restoredWindow?.height)
+    && Number.isFinite(evidence?.restoredZoomFactor),
+  `${artifactLabel} did not record restored window state.`);
 }
 
 function delay(milliseconds) {
@@ -84,7 +124,9 @@ function readReleaseMetadata() {
   return {
     appId: build.appId,
     installerPath: path.join(RELEASE_DIRECTORY, installerArtifact),
+    packageVersion: packageMetadata.version,
     portablePath: path.join(RELEASE_DIRECTORY, portableArtifact),
+    productName: build.productName,
     productFilename,
     shortcutName,
     nsisGuid: build.nsis.guid,
@@ -269,12 +311,12 @@ async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDir
   try {
     await waitForFile(capability.resultPath, launched, SELF_TEST_TIMEOUT_MS, `${artifactLabel} capability self-test`);
     const processResult = await waitForProcess(launched, SELF_TEST_TIMEOUT_MS);
-    assert(processResult.code === 0,
-      `${artifactLabel} capability self-test exited with code ${processResult.code} (signal ${processResult.signal}).`);
     assertRegularFile(capability.resultPath, `${artifactLabel} self-test report`);
 
     const report = JSON.parse(fs.readFileSync(capability.resultPath, 'utf8'));
     assert(report.status === 'passed', `${artifactLabel} capability self-test failed: ${report.error || JSON.stringify(report)}`);
+    assert(processResult.code === 0,
+      `${artifactLabel} capability self-test exited with code ${processResult.code} (signal ${processResult.signal}).`);
     assert(report.checks?.localRenderer?.url === 'nexoip://app/', `${artifactLabel} did not load the local renderer origin.`);
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', `${artifactLabel} renderer title was unexpected.`);
     assert(report.checks?.fixture?.name === path.basename(FIXTURE_PATH), `${artifactLabel} did not register the self-test fixture.`);
@@ -292,6 +334,7 @@ async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDir
     assert(report.checks.bundledRuntimes.every((runtime) => runtime?.status === 200
       && Number.isSafeInteger(runtime.bytes) && runtime.bytes > 0),
     `${artifactLabel} self-test reported a missing or empty packaged Draco/Basis runtime.`);
+    assertAccessibilityResponsiveEvidence(report, artifactLabel);
     logDiagnostic(`${artifactLabel}: capability self-test passed without CDP.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -301,12 +344,8 @@ async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDir
   }
 }
 
-function getNsisUninstallRegistryKey(metadata) {
-  return `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${metadata.nsisGuid}`;
-}
-
 function registryKeyExists(rootKey, registryPath) {
-  const result = spawnSync('reg.exe', ['query', `${rootKey}\\${registryPath}`], {
+  const result = spawnSync('reg.exe', ['query', `${rootKey}\\${registryPath}`, '/reg:64'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -317,23 +356,146 @@ function registryKeyExists(rootKey, registryPath) {
   throw new Error(`Unable to inspect ${rootKey}\\${registryPath}: ${result.stderr || result.stdout || `reg.exe exited ${result.status}`}`);
 }
 
-function assertNoExistingNsisInstallation(metadata) {
-  const registryPath = getNsisUninstallRegistryKey(metadata);
-  const existingRoots = ['HKCU', 'HKLM'].filter((rootKey) => registryKeyExists(rootKey, registryPath));
-  assert(existingRoots.length === 0,
-    `Refusing to run the NSIS smoke test because an existing NexoIP installation was found in ${existingRoots.join(', ')}. Uninstall it first; this guard prevents the artifact installer from replacing a real installation.`);
-  return registryPath;
+export function getNsisRegistryKeys(metadata) {
+  const uninstallAppKey = metadata.nsisGuid.replace(/\\/g, ' - ');
+  const uninstallRegistryPaths = [...new Set([
+    `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${uninstallAppKey}`,
+    `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${metadata.nsisGuid}`,
+  ])];
+  return [
+    { kind: 'install', registryPath: `Software\\${metadata.nsisGuid}` },
+    ...uninstallRegistryPaths.map((registryPath) => ({ kind: 'uninstall', registryPath })),
+  ];
 }
 
-async function waitForNsisInstallationRemoval(registryPath) {
+export function getNsisRegistryLocations(registryKeys) {
+  return registryKeys.flatMap((registryKey) =>
+    ['HKCU', 'HKLM'].map((rootKey) => ({ ...registryKey, rootKey })));
+}
+
+function assertNoExistingNsisInstallation(metadata) {
+  const registryKeys = getNsisRegistryKeys(metadata);
+  const existingLocations = getNsisRegistryLocations(registryKeys)
+    .filter(({ rootKey, registryPath }) => registryKeyExists(rootKey, registryPath))
+    .map(({ rootKey, registryPath }) => `${rootKey}\\${registryPath}`);
+  assert(existingLocations.length === 0,
+    `Refusing to run the NSIS smoke test because existing NexoIP installation metadata was found in ${existingLocations.join(', ')}. Uninstall it first; this guard prevents the artifact installer from replacing a real installation.`);
+  return registryKeys;
+}
+
+async function waitForNsisInstallationRemoval(registryKeys) {
   const deadline = Date.now() + CLEANUP_TIMEOUT_MS;
-  let remainingRoots = [];
+  let remainingLocations = [];
   while (Date.now() < deadline) {
-    remainingRoots = ['HKCU', 'HKLM'].filter((rootKey) => registryKeyExists(rootKey, registryPath));
-    if (remainingRoots.length === 0) return;
+    remainingLocations = getNsisRegistryLocations(registryKeys)
+      .filter(({ rootKey, registryPath }) => registryKeyExists(rootKey, registryPath))
+      .map(({ rootKey, registryPath }) => `${rootKey}\\${registryPath}`);
+    if (remainingLocations.length === 0) return;
     await delay(POLL_INTERVAL_MS);
   }
-  throw new Error(`NSIS uninstall cleanup left registry entries in ${remainingRoots.join(', ')}.`);
+  throw new Error(`NSIS uninstall cleanup left registry entries in ${remainingLocations.join(', ')}.`);
+}
+
+function readRegistryString(rootKey, registryPath, valueName) {
+  const result = spawnSync('reg.exe', [
+    'query',
+    `${rootKey}\\${registryPath}`,
+    '/v',
+    valueName,
+    '/reg:64',
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  assert(result.status === 0,
+    `Unable to read ${valueName} from ${rootKey}\\${registryPath}: ${result.stderr || result.stdout || `reg.exe exited ${result.status}`}`);
+
+  const valueLine = result.stdout.split(/\r?\n/)
+    .map((line) => line.match(/^\s*(\S+)\s+(REG_\S+)\s+(.*)$/i))
+    .find((match) => match?.[1].toLowerCase() === valueName.toLowerCase());
+  assert(valueLine?.[2] === 'REG_SZ',
+    `${rootKey}\\${registryPath} ${valueName} must be a REG_SZ value.`);
+  return valueLine[3].trim();
+}
+
+function assertSameWindowsPath(actualPath, expectedPath, label) {
+  assert(path.win32.isAbsolute(actualPath) && path.win32.isAbsolute(expectedPath),
+    `${label} must compare absolute Windows paths.`);
+  const normalizedActual = path.win32.resolve(actualPath).toLowerCase();
+  const normalizedExpected = path.win32.resolve(expectedPath).toLowerCase();
+  assert(normalizedActual === normalizedExpected,
+    `${label} points to ${actualPath}, not the temporary smoke-test resource ${expectedPath}.`);
+}
+
+function assertNsisRegistryCommand(command, expectedExecutable, expectedArguments, label) {
+  const match = command.match(/^"([^"]+)"(?:\s+(.+))?$/);
+  assert(match, `${label} has an unexpected command format.`);
+  assertSameWindowsPath(match[1], expectedExecutable, `${label} executable`);
+  const actualArguments = match[2]?.trim().split(/\s+/).filter(Boolean) || [];
+  assert(actualArguments.length === expectedArguments.length
+    && actualArguments.every((argument, index) => argument.toLowerCase() === expectedArguments[index].toLowerCase()),
+  `${label} has unexpected arguments: ${actualArguments.join(' ')}.`);
+}
+
+function collectOwnedNsisRegistryLocations({
+  registryKeys,
+  installDirectory,
+  uninstallerPath,
+  metadata,
+}) {
+  const ownedLocations = [];
+  for (const location of getNsisRegistryLocations(registryKeys)) {
+    const { kind, rootKey, registryPath } = location;
+    if (!registryKeyExists(rootKey, registryPath)) continue;
+
+    if (kind === 'install') {
+      assertSameWindowsPath(
+        readRegistryString(rootKey, registryPath, 'InstallLocation'),
+        installDirectory,
+        `${rootKey}\\${registryPath} InstallLocation`,
+      );
+      assert(readRegistryString(rootKey, registryPath, 'KeepShortcuts') === 'true',
+        `${rootKey}\\${registryPath} KeepShortcuts is unexpected.`);
+      assert(readRegistryString(rootKey, registryPath, 'ShortcutName') === metadata.shortcutName,
+        `${rootKey}\\${registryPath} ShortcutName is unexpected.`);
+    } else {
+      const installModeArgument = rootKey === 'HKLM' ? '/allusers' : '/currentuser';
+      assertNsisRegistryCommand(
+        readRegistryString(rootKey, registryPath, 'UninstallString'),
+        uninstallerPath,
+        [installModeArgument],
+        `${rootKey}\\${registryPath} UninstallString`,
+      );
+      assertNsisRegistryCommand(
+        readRegistryString(rootKey, registryPath, 'QuietUninstallString'),
+        uninstallerPath,
+        [installModeArgument, '/S'],
+        `${rootKey}\\${registryPath} QuietUninstallString`,
+      );
+      assert(readRegistryString(rootKey, registryPath, 'DisplayVersion') === metadata.packageVersion,
+        `${rootKey}\\${registryPath} DisplayVersion is unexpected.`);
+    }
+    ownedLocations.push(location);
+  }
+  return ownedLocations;
+}
+
+function deleteOwnedRegistryKey({ rootKey, registryPath }) {
+  const result = spawnSync('reg.exe', [
+    'delete',
+    `${rootKey}\\${registryPath}`,
+    '/f',
+    '/reg:64',
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  assert(result.status === 0,
+    `Unable to delete verified smoke-test registry key ${rootKey}\\${registryPath}: ${result.stderr || result.stdout || `reg.exe exited ${result.status}`}`);
 }
 
 function getShortcutPaths(shortcutName) {
@@ -351,6 +513,44 @@ function assertNoExistingShortcuts(shortcutPaths) {
   const existing = shortcutPaths.filter((shortcutPath) => fs.existsSync(shortcutPath));
   assert(existing.length === 0,
     `Refusing to run the NSIS smoke test because its shortcuts already exist: ${existing.join(', ')}. This guard prevents changes to user-managed shortcuts.`);
+}
+
+function readShortcutTarget(shortcutPath) {
+  const stats = fs.lstatSync(shortcutPath);
+  assert(stats.isFile() && !stats.isSymbolicLink(),
+    `Refusing to inspect a non-file or symbolic-link shortcut: ${shortcutPath}`);
+  const script = [
+    '$shortcutPath = $args[0]',
+    '$shell = New-Object -ComObject WScript.Shell',
+    '$shortcut = $shell.CreateShortcut($shortcutPath)',
+    '[Console]::Out.Write($shortcut.TargetPath)',
+    '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)',
+    '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+    shortcutPath,
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  assert(result.status === 0 && result.stdout.trim().length > 0,
+    `Unable to prove ownership of shortcut ${shortcutPath}: ${result.stderr || `PowerShell exited ${result.status}`}`);
+  return result.stdout.trim();
+}
+
+function collectOwnedShortcutPaths(shortcutPaths, installedExecutable) {
+  return shortcutPaths.filter((shortcutPath) => {
+    if (!fs.existsSync(shortcutPath)) return false;
+    assertSameWindowsPath(readShortcutTarget(shortcutPath), installedExecutable, `Shortcut ${shortcutPath} target`);
+    return true;
+  });
 }
 
 function assertNoExistingUpdaterCache(updaterCachePath) {
@@ -384,7 +584,7 @@ function assertShortcutsRemoved(shortcutPaths) {
   assert(remaining.length === 0, `NSIS uninstall cleanup left shortcuts behind: ${remaining.join(', ')}.`);
 }
 
-async function uninstallTemporaryNsis({ uninstallerPath, installDirectory, uninstallerTemporaryDirectory, registryPath, shortcutPaths }) {
+async function uninstallTemporaryNsis({ uninstallerPath, installDirectory, uninstallerTemporaryDirectory, registryKeys, shortcutPaths }) {
   const uninstallation = await runProcess(uninstallerPath, ['/S', '/currentuser'], {
     cwd: installDirectory,
     env: createSmokeEnvironment(uninstallerTemporaryDirectory),
@@ -394,9 +594,65 @@ async function uninstallTemporaryNsis({ uninstallerPath, installDirectory, unins
   assert(uninstallation.code === 0,
     `NSIS silent uninstall exited with code ${uninstallation.code} (signal ${uninstallation.signal}). Output:\n${uninstallation.output}`);
   await waitForAbsence(installDirectory, CLEANUP_TIMEOUT_MS, 'NSIS uninstall cleanup');
-  await waitForNsisInstallationRemoval(registryPath);
+  await waitForNsisInstallationRemoval(registryKeys);
   assertShortcutsRemoved(shortcutPaths);
   logDiagnostic('NSIS uninstall removed its temporary installation, registry entry, and shortcuts.');
+}
+
+async function removeVerifiedNsisResidues({
+  installDirectory,
+  installedExecutable,
+  uninstallerPath,
+  registryKeys,
+  shortcutPaths,
+  metadata,
+}) {
+  const ownedRegistryLocations = collectOwnedNsisRegistryLocations({
+    registryKeys,
+    installDirectory,
+    uninstallerPath,
+    metadata,
+  });
+  const ownedShortcutPaths = collectOwnedShortcutPaths(shortcutPaths, installedExecutable);
+
+  for (const shortcutPath of ownedShortcutPaths) fs.unlinkSync(shortcutPath);
+  for (const registryLocation of ownedRegistryLocations) deleteOwnedRegistryKey(registryLocation);
+
+  assertShortcutsRemoved(shortcutPaths);
+  await waitForNsisInstallationRemoval(registryKeys);
+  logDiagnostic('NSIS cleanup fallback removed only registry entries and shortcuts verified as belonging to the temporary installation.');
+}
+
+export async function cleanupTemporaryNsisInstallation({
+  uninstallerPath,
+  uninstallerAttempted,
+  uninstallArguments,
+  residueArguments,
+  assertUninstallerFile = assertRegularFile,
+  uninstall = uninstallTemporaryNsis,
+  removeResidues = removeVerifiedNsisResidues,
+}) {
+  let uninstallerFailure;
+  if (!uninstallerAttempted) {
+    try {
+      assertUninstallerFile(uninstallerPath, 'NSIS uninstaller executable');
+      await uninstall(uninstallArguments);
+      return;
+    } catch (error) {
+      uninstallerFailure = error;
+      const message = error instanceof Error ? error.message : String(error);
+      logDiagnostic(`NSIS uninstaller was unavailable during cleanup; attempting verified residue cleanup: ${message}`);
+    }
+  }
+
+  try {
+    await removeResidues(residueArguments);
+  } catch (error) {
+    const failures = uninstallerFailure ? [uninstallerFailure, error] : [error];
+    throw new AggregateError(failures,
+      'NSIS cleanup could not remove every residue without stronger ownership evidence.',
+      { cause: error });
+  }
 }
 
 async function main() {
@@ -406,7 +662,7 @@ async function main() {
   assertRegularFile(metadata.portablePath, 'portable artifact');
   assertRegularFile(FIXTURE_PATH, 'self-test fixture');
 
-  const registryPath = assertNoExistingNsisInstallation(metadata);
+  const registryKeys = assertNoExistingNsisInstallation(metadata);
   const shortcutPaths = getShortcutPaths(metadata.shortcutName);
   assertNoExistingShortcuts(shortcutPaths);
   assertNoExistingUpdaterCache(metadata.updaterCachePath);
@@ -416,20 +672,24 @@ async function main() {
   const installDirectory = assertTemporaryChild(temporaryRoot, path.join(temporaryRoot, 'installed-app'), 'NSIS installation directory');
   const installerTemporaryDirectory = assertTemporaryChild(temporaryRoot, path.join(temporaryRoot, 'installer-temp'), 'installer temporary directory');
   const uninstallerTemporaryDirectory = assertTemporaryChild(temporaryRoot, path.join(temporaryRoot, 'uninstaller-temp'), 'uninstaller temporary directory');
-  const installedProfileDirectory = assertTemporaryChild(installerTemporaryDirectory, path.join(installerTemporaryDirectory, 'profile'), 'installed self-test profile');
+  const installedUserDataDirectory = assertTemporaryChild(installerTemporaryDirectory, path.join(installerTemporaryDirectory, 'user-data'), 'installed self-test user-data directory');
   const portableTemporaryDirectory = assertTemporaryChild(temporaryRoot, path.join(temporaryRoot, 'portable-temp'), 'portable temporary directory');
-  const portableProfileDirectory = assertTemporaryChild(portableTemporaryDirectory, path.join(portableTemporaryDirectory, 'profile'), 'portable self-test profile');
+  const portableUserDataDirectory = assertTemporaryChild(portableTemporaryDirectory, path.join(portableTemporaryDirectory, 'user-data'), 'portable self-test user-data directory');
+  const installedExecutable = assertTemporaryChild(installDirectory,
+    path.join(installDirectory, `${metadata.productFilename}.exe`), 'installed application executable');
+  const uninstallerPath = assertTemporaryChild(installDirectory,
+    path.join(installDirectory, `Uninstall ${metadata.productFilename}.exe`), 'NSIS uninstaller executable');
 
   fs.mkdirSync(installerTemporaryDirectory, { recursive: true });
   fs.mkdirSync(uninstallerTemporaryDirectory, { recursive: true });
   fs.mkdirSync(portableTemporaryDirectory, { recursive: true });
 
   let primaryError;
-  let uninstallerPath;
   let nsisInstallationNeedsCleanup = false;
   let updaterCacheNeedsCleanup = false;
+  let uninstallerAttempted = false;
   try {
-    const installation = await runProcess(metadata.installerPath, ['/S', `/D=${installDirectory}`], {
+    const installation = await runProcess(metadata.installerPath, ['/S', '/currentuser', `/D=${installDirectory}`], {
       cwd: path.dirname(metadata.installerPath),
       env: createSmokeEnvironment(installerTemporaryDirectory),
       label: 'NSIS silent installation into the temporary directory',
@@ -437,30 +697,27 @@ async function main() {
     });
     assert(installation.code === 0,
       `NSIS silent installation exited with code ${installation.code} (signal ${installation.signal}). Output:\n${installation.output}`);
-
-    const installedExecutable = assertTemporaryChild(installDirectory,
-      path.join(installDirectory, `${metadata.productFilename}.exe`), 'installed application executable');
-    uninstallerPath = assertTemporaryChild(installDirectory,
-      path.join(installDirectory, `Uninstall ${metadata.productFilename}.exe`), 'NSIS uninstaller executable');
-    assertRegularFile(uninstallerPath, 'NSIS uninstaller executable');
     nsisInstallationNeedsCleanup = true;
+    updaterCacheNeedsCleanup = true;
+
+    assertRegularFile(uninstallerPath, 'NSIS uninstaller executable');
     assertRegularFile(installedExecutable, 'installed application executable');
     assertOwnedUpdaterCache(metadata);
-    updaterCacheNeedsCleanup = true;
     logDiagnostic(`NSIS installer produced ${installedExecutable}.`);
 
     await runCapabilitySelfTest({
       executablePath: installedExecutable,
       artifactLabel: 'Installed NSIS application',
-      profileDirectory: installedProfileDirectory,
+      profileDirectory: installedUserDataDirectory,
       temporaryDirectory: installerTemporaryDirectory,
     });
 
+    uninstallerAttempted = true;
     await uninstallTemporaryNsis({
       uninstallerPath,
       installDirectory,
       uninstallerTemporaryDirectory,
-      registryPath,
+      registryKeys,
       shortcutPaths,
     });
     nsisInstallationNeedsCleanup = false;
@@ -468,7 +725,7 @@ async function main() {
     await runCapabilitySelfTest({
       executablePath: metadata.portablePath,
       artifactLabel: 'Portable application',
-      profileDirectory: portableProfileDirectory,
+      profileDirectory: portableUserDataDirectory,
       temporaryDirectory: portableTemporaryDirectory,
     });
     logDiagnostic('Portable artifact completed the same capability self-test without CDP.');
@@ -477,15 +734,26 @@ async function main() {
   }
 
   const cleanupFailures = [];
-  if (nsisInstallationNeedsCleanup && uninstallerPath) {
+  if (nsisInstallationNeedsCleanup) {
     try {
-      await uninstallTemporaryNsis({
+      const uninstallArguments = {
         uninstallerPath,
         installDirectory,
         uninstallerTemporaryDirectory,
-        registryPath,
+        registryKeys,
         shortcutPaths,
+      };
+      await cleanupTemporaryNsisInstallation({
+        uninstallerPath,
+        uninstallerAttempted,
+        uninstallArguments,
+        residueArguments: {
+          ...uninstallArguments,
+          installedExecutable,
+          metadata,
+        },
       });
+      nsisInstallationNeedsCleanup = false;
     } catch (error) {
       cleanupFailures.push(error);
     }
@@ -504,11 +772,13 @@ async function main() {
   }
   if (cleanupFailures.length > 0) {
     const cleanupError = new AggregateError(cleanupFailures, 'Release artifact smoke cleanup failed.');
-    try {
-      if (!primaryError) throw cleanupError;
-      logDiagnostic(`${cleanupError.message} The primary test failure is preserved.`);
-    } catch (error) {
-      if (!primaryError) primaryError = error;
+    if (primaryError) {
+      for (const failure of cleanupFailures) {
+        const message = failure instanceof Error ? failure.stack || failure.message : String(failure);
+        logDiagnostic(`Cleanup failure while preserving the primary test failure: ${message}`);
+      }
+    } else {
+      primaryError = cleanupError;
     }
   }
 
@@ -517,13 +787,24 @@ async function main() {
   console.log('Release artifact smoke passed: NSIS install/self-test/uninstall cleanup and portable self-test completed without CDP.');
 }
 
-try {
-  await main();
-} catch (error) {
-  fs.mkdirSync(DIAGNOSTICS_DIRECTORY, { recursive: true });
-  const diagnosticPath = path.join(DIAGNOSTICS_DIRECTORY, 'release-artifact-smoke.log');
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  fs.writeFileSync(diagnosticPath, `${diagnosticEvents.join('\n')}\n\n${message}\n`, 'utf8');
-  console.error(`Release artifact smoke failed. Diagnostics: ${diagnosticPath}`);
-  throw error;
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(SCRIPT_PATH);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  try {
+    await main();
+  } catch (error) {
+    fs.mkdirSync(DIAGNOSTICS_DIRECTORY, { recursive: true });
+    const diagnosticPath = path.join(DIAGNOSTICS_DIRECTORY, 'release-artifact-smoke.log');
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    fs.writeFileSync(diagnosticPath, `${diagnosticEvents.join('\n')}\n\n${message}\n`, 'utf8');
+    console.error(`Release artifact smoke failed. Diagnostics: ${diagnosticPath}`);
+    throw error;
+  }
 }

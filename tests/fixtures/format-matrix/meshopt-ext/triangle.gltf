@@ -1,0 +1,86 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "NexoIP format-matrix fixture with meshoptimizer 1.2.0"
+  },
+  "extensionsUsed": ["EXT_meshopt_compression"],
+  "extensionsRequired": ["EXT_meshopt_compression"],
+  "scene": 0,
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "name": "MeshoptTriangle", "mesh": 0 }],
+  "meshes": [{
+    "name": "MeshoptTriangle",
+    "primitives": [{
+      "attributes": { "POSITION": 0 },
+      "indices": 1,
+      "mode": 4
+    }]
+  }],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,oAAAATwAAAD//wE8AAAAfn0AAAEMAAAA/wEMAAAAfgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "byteLength": 67
+    },
+    {
+      "uri": "data:application/octet-stream;base64,4fAAdodWZ3iphmWJaJgBaQAA",
+      "byteLength": 18
+    },
+    {
+      "byteLength": 42,
+      "extensions": { "EXT_meshopt_compression": { "fallback": true } }
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 2,
+      "byteOffset": 0,
+      "byteLength": 36,
+      "byteStride": 12,
+      "target": 34962,
+      "extensions": {
+        "EXT_meshopt_compression": {
+          "buffer": 0,
+          "byteOffset": 0,
+          "byteLength": 67,
+          "byteStride": 12,
+          "count": 3,
+          "mode": "ATTRIBUTES"
+        }
+      }
+    },
+    {
+      "buffer": 2,
+      "byteOffset": 36,
+      "byteLength": 6,
+      "target": 34963,
+      "extensions": {
+        "EXT_meshopt_compression": {
+          "buffer": 1,
+          "byteOffset": 0,
+          "byteLength": 18,
+          "byteStride": 2,
+          "count": 3,
+          "mode": "TRIANGLES"
+        }
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [0, 0, 0],
+      "max": [1, 1, 0]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5123,
+      "count": 3,
+      "type": "SCALAR",
+      "min": [0],
+      "max": [2]
+    }
+  ]
+}

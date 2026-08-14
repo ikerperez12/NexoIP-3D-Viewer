@@ -8,12 +8,12 @@ This document is the release contract for the first stable version. A green buil
 
 | Format | Alpha status | Stable-release requirement |
 | --- | --- | --- |
-| GLB / glTF | Static glTF and animated GLB round-trip tested; Draco, Meshopt and KTX2 wired but compressed fixtures incomplete | Static and animated scenes; local buffers and textures; Draco, Meshopt and KTX2; actionable failures for unsupported extensions; packaged fixtures for each path. |
-| OBJ | Geometry and adjacent MTL supported; textured fixture incomplete | MTL and local texture support, safe sidecar handling, and a documented fallback when material files are absent. |
+| GLB / glTF | External buffer/PNG glTF and animated GLB round-trip tested; required EXT Meshopt decodes from a pinned fixture; pinned Draco/KTX2 manifests, sidecars and bundled runtime paths are checked but not decoded in the packaged app | Static and animated scenes; local buffers and textures; real packaged Draco, Meshopt and KTX2 decoding; actionable failures for unsupported extensions; packaged fixtures for each path. |
+| OBJ | Multiple adjacent MTL libraries and local PNG textures tested; missing-material fallback tested | MTL and local texture support, safe sidecar handling, and a documented fallback when material files are absent. |
 | STL | ASCII packaged smoke plus binary colour unit fixture | ASCII and binary fixtures, preserved supported vertex colours, malformed-file handling, and deterministic statistics. |
-| FBX | Unverified beyond loader wiring | Static, animation, embedded texture and supported local texture fixtures tested in the packaged app. |
+| FBX | Compact redistributable static fixture parses in the loader matrix | Static, animation, embedded texture and supported local texture fixtures tested in the packaged app. |
 | PLY | Meshes and point clouds tested in-memory, including authored normals and vertex colours | Packaged mesh and point-cloud fixtures plus malformed-file handling. |
-| DAE | Unverified beyond loader wiring | Unit/up-axis conversion, animation and supported local textures tested with distributable fixtures. |
+| DAE | Redistributable centimetre-scale, Z-up, textured and matrix-animated fixture parses in the loader matrix | Unit/up-axis conversion, animation and supported local textures tested in the packaged app. |
 
 Export remains alpha. GLB now exports the clean imported clone rather than viewport material/camera mutations, includes hidden source nodes, and preserves animation clips in a round-trip unit test. STL and OBJ intentionally preserve geometry only; a packaged cross-format matrix is still required for stable.
 
@@ -70,7 +70,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 
 Only after every gate is satisfied may the project remove the alpha warning and publish a stable GitHub Release.
 
-Current evidence: the NSIS and portable smoke test passes on the development Windows host using isolated temporary profiles, verifies the local renderer, capability bridge, model protocol and bundled decoder runtimes, and confirms uninstall cleanup. The broader Windows 10/11 and constrained-GPU matrix remains open for stable.
+Current evidence: the NSIS and portable smoke test passes on the development Windows host using unique temporary install/data directories on a guarded host profile, verifies the local renderer, capability bridge, model protocol and bundled decoder runtimes, and confirms cleanup of the state it creates. The packaged self-test also exercises targeted keyboard, semantic and no-global-overflow invariants at 900x600 and 200% browser zoom; this is not a complete WCAG conformance audit. Clean-profile Windows 10/11, assistive-technology and constrained-GPU evidence remains open for stable.
 
 ## Explicit non-goals for the first stable release
 

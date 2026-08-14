@@ -265,7 +265,12 @@ async function createWindow({ show = true } = {}) {
 
 async function runConfiguredPackagedSelfTest() {
   const config = await loadPackagedSelfTestConfig(packagedSelfTestRequest);
-  const report = await runPackagedSelfTest({ scanner, config, renderer: mainWindow.webContents });
+  const report = await runPackagedSelfTest({
+    scanner,
+    config,
+    renderer: mainWindow.webContents,
+    window: mainWindow,
+  });
   await writePackagedSelfTestReport(config.resultPath, report);
   if (report.status !== 'passed') {
     throw new Error(report.error || 'The packaged self-test failed.');

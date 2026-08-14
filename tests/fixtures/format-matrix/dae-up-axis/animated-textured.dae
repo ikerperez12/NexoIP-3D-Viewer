@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authored NexoIP fixture: centimetres, Z-up, texture sidecar, matrix clip. -->
+<COLLADA version="1.4.1">
+  <asset>
+    <contributor><authoring_tool>NexoIP format-matrix fixture</authoring_tool></contributor>
+    <unit name="centimeter" meter="0.01"/>
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_images>
+    <image id="checker-image"><init_from>checker.png</init_from></image>
+  </library_images>
+  <library_effects>
+    <effect id="textured-effect">
+      <profile_COMMON>
+        <newparam sid="checker-surface"><surface type="2D"><init_from>checker-image</init_from></surface></newparam>
+        <newparam sid="checker-sampler"><sampler2D><source>checker-surface</source></sampler2D></newparam>
+        <technique sid="common"><lambert><diffuse><texture texture="checker-sampler" texcoord="UVMap"/></diffuse></lambert></technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials><material id="textured-material" name="TexturedMaterial"><instance_effect url="#textured-effect"/></material></library_materials>
+  <library_geometries>
+    <geometry id="triangle-geometry" name="TriangleGeometry"><mesh>
+      <source id="triangle-positions"><float_array id="triangle-positions-array" count="9">0 0 0 100 0 0 0 100 0</float_array><technique_common><accessor source="#triangle-positions-array" count="3" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <source id="triangle-normals"><float_array id="triangle-normals-array" count="3">0 0 1</float_array><technique_common><accessor source="#triangle-normals-array" count="1" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <source id="triangle-uvs"><float_array id="triangle-uvs-array" count="6">0 0 1 0 0 1</float_array><technique_common><accessor source="#triangle-uvs-array" count="3" stride="2"><param name="S" type="float"/><param name="T" type="float"/></accessor></technique_common></source>
+      <vertices id="triangle-vertices"><input semantic="POSITION" source="#triangle-positions"/></vertices>
+      <triangles material="surface-symbol" count="1"><input semantic="VERTEX" source="#triangle-vertices" offset="0"/><input semantic="NORMAL" source="#triangle-normals" offset="1"/><input semantic="TEXCOORD" source="#triangle-uvs" offset="2" set="0"/><p>0 0 0 1 0 1 2 0 2</p></triangles>
+    </mesh></geometry>
+  </library_geometries>
+  <library_animations>
+    <animation id="matrix-motion">
+      <source id="matrix-motion-input"><float_array id="matrix-motion-input-array" count="2">0 1</float_array><technique_common><accessor source="#matrix-motion-input-array" count="2" stride="1"><param name="TIME" type="float"/></accessor></technique_common></source>
+      <source id="matrix-motion-output"><float_array id="matrix-motion-output-array" count="32">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 200 0 0 1</float_array><technique_common><accessor source="#matrix-motion-output-array" count="2" stride="16"><param name="TRANSFORM" type="float4x4"/></accessor></technique_common></source>
+      <sampler id="matrix-motion-sampler"><input semantic="INPUT" source="#matrix-motion-input"/><input semantic="OUTPUT" source="#matrix-motion-output"/></sampler>
+      <channel source="#matrix-motion-sampler" target="RotatingTriangle/transform"/>
+    </animation>
+  </library_animations>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="ZUpCentimeterScene">
+      <node id="RotatingTriangle" name="RotatingTriangle"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix><instance_geometry url="#triangle-geometry"><bind_material><technique_common><instance_material symbol="surface-symbol" target="#textured-material"><bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0"/></instance_material></technique_common></bind_material></instance_geometry></node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>

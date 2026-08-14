@@ -411,7 +411,7 @@ export default function App() {
   }, [currentFile?.name, downloadBlob, modelData, showToast]);
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-black" aria-label="NexoIP 3D Viewer">
+    <main className="relative h-full w-full overflow-hidden bg-black" aria-label="NexoIP 3D Viewer">
       <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-black text-sm text-gray-200" role="status">Preparando el visor 3D…</div>}>
         <Viewport3D
           currentFile={currentFile}

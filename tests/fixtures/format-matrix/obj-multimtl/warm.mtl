@@ -1,0 +1,4 @@
+# Authored NexoIP fixture.
+newmtl WarmTexture
+Kd 1.000 0.500 0.000
+map_Kd warm-texture.png
