@@ -309,11 +309,13 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       };
       const inspectAction = (element) => {
         element?.focus();
+        const rect = element?.getBoundingClientRect();
         return {
           visible: isVisible(element),
           insideViewport: isInsideViewport(element),
           focusable: document.activeElement === element,
           enabled: Boolean(element && !element.disabled && element.getAttribute('aria-disabled') !== 'true'),
+          rect: rect ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom } : null,
         };
       };
       const click = async (element, message) => {
@@ -335,6 +337,40 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
 
       if (!await waitFor(() => document.querySelector('main') && getAction('Abrir archivo local') && document.querySelector('[data-viewport-controls][data-camera-state]'))) {
         throw new Error('The packaged renderer did not expose the expected accessible controls.');
+      }
+
+      if (document.fonts?.ready) await document.fonts.ready;
+      const waitForStableLayout = async (...elements) => {
+        let previousSnapshot = '';
+        let stableFrames = 0;
+        return waitFor(() => {
+          const scrollRoot = document.scrollingElement || document.documentElement;
+          const values = [
+            window.innerWidth,
+            window.innerHeight,
+            scrollRoot.clientWidth,
+            scrollRoot.clientHeight,
+            ...elements.flatMap((element) => {
+              const rect = element?.getBoundingClientRect();
+              return rect ? [rect.left, rect.top, rect.right, rect.bottom] : ['missing'];
+            }),
+          ];
+          const snapshot = values
+            .map((value) => (typeof value === 'number' ? value.toFixed(2) : value))
+            .join(',');
+          if (snapshot === previousSnapshot) stableFrames += 1;
+          else {
+            previousSnapshot = snapshot;
+            stableFrames = 0;
+          }
+          return stableFrames >= 2;
+        });
+      };
+      const initialMain = document.querySelector('main');
+      const initialOpenLocal = getAction('Abrir archivo local');
+      const initialViewport = document.querySelector('[data-viewport-controls]');
+      if (!await waitForStableLayout(initialMain, initialOpenLocal, initialViewport)) {
+        throw new Error('The packaged renderer layout did not settle after applying the accessibility viewport.');
       }
 
       const initialLibraryOpen = Boolean(document.querySelector('aside[aria-label="Biblioteca de modelos locales"]'));

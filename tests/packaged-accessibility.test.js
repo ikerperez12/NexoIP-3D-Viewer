@@ -146,6 +146,8 @@ test('packaged self-test records accessibility evidence and restores its viewpor
   expect(report.status).toBe('passed');
   expect(report.checks.accessibilityResponsive.viewport.actualWindow).toEqual({ width: 900, height: 600 });
   expect(report.checks.accessibilityResponsive.viewport.actualZoomFactor).toBe(2);
+  expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('waitForStableLayout');
+  expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('document.fonts?.ready');
   expect(report.checks.accessibilityResponsive.restoredWindow).toEqual(originalBounds);
   expect(report.checks.accessibilityResponsive.restoredZoomFactor).toBe(1);
   expect(applicationWindow.setSize).toHaveBeenCalledWith(900, 600);
