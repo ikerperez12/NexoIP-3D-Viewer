@@ -55,7 +55,7 @@
     "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "4.3.3",
     "@vitejs/plugin-react": "6.0.5",
-    "@xmldom/xmldom": "0.8.14",
+    "@xmldom/xmldom": "0.9.11",
     "concurrently": "10.0.4",
     "cross-env": "10.1.0",
     "electron": "43.4.0",
