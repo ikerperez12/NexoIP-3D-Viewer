@@ -44,7 +44,7 @@ npm run test:release-artifacts
 ## 5) Coverage and Quality Signals
 
 - Coverage provider + threshold: [TODO] none installed (`npm ls @vitest/coverage-v8 c8 nyc --depth=0` returns empty).
-- Current local evidence for this hardening worktree: 24 suites and 126 tests passed through `npm run check`; the final PR/release commit must rerun the same gate.
+- Current local evidence for this hardening worktree: 27 suites and 155 tests passed through `npm run check`; the final PR/release commit must rerun the same gate.
 - CI additionally builds and runs the packaged Windows smoke; CodeQL runs `security-extended` queries.
 - Known gaps: broader per-format fidelity and malformed corpus, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
 

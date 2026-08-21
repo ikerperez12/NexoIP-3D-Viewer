@@ -39,7 +39,7 @@ function mergeRefreshOptions(previous, next) {
 /**
  * Coalesces catalog refresh requests into one-at-a-time loads. This prevents
  * list/tree IPC replies from racing each other while a scan is publishing new
- * validated models continuously.
+ * structurally prechecked models continuously.
  */
 export function createCatalogRefreshQueue(refreshCatalog) {
   if (typeof refreshCatalog !== 'function') {

@@ -28,8 +28,8 @@ No database, cache service, browser storage catalog or cloud synchronization is 
 ## 3) Secrets and Credentials Handling
 
 - Runtime credential sources: none.
-- Stable signing uses `CSC_LINK` and `CSC_KEY_PASSWORD` only in the protected `production-signing` build step; the expected certificate subject is a protected environment variable (`.github/workflows/release.yml:86`, `.github/workflows/release.yml:107-111`, `.github/workflows/release.yml:151-158`).
-- Publication write and OIDC permissions are isolated in the later publish job, which consumes verified artifacts rather than installing dependencies (`.github/workflows/release.yml:290-323`).
+- Stable signing uses `CSC_LINK` and `CSC_KEY_PASSWORD` only in the protected `production-signing` build step; the expected certificate subject is a protected environment variable. The subject is exported only after signature verification so the release notes can state the exact expected public identity.
+- The attestation job has OIDC and attestation permissions but cannot write releases. The later publish job has only `contents: write`, consumes verified artifacts, and independently downloads the reserved draft assets to check their names, sizes, and SHA-256 values before publication.
 - GitHub checkout disables persisted credentials in CI and release builds.
 - Hardcoding checks: Gitleaks and GitHub secret scanning are external gates; repository policy also forbids certificates, `.env` files and credentials (`CONTRIBUTING.md:27`).
 - [TODO] Certificate owner, rotation procedure and recovery contact remain undefined until a signing provider is selected.
@@ -39,7 +39,7 @@ No database, cache service, browser storage catalog or cloud synchronization is 
 - Runtime file operations fail closed and expose generic messages across IPC.
 - Scans and primary model reads support cancellation. Selected roots have no global depth, directory, entry or model-count cap; structural validation, path containment, per-file size and decoded-resource limits remain explicit.
 - Smoke harnesses use bounded polling, process timeouts, guarded cleanup and a ten-scenario representative format matrix (`scripts/packaged-smoke.mjs`, `scripts/release-artifact-smoke.mjs`, `scripts/packaged-fixture-matrix.mjs`).
-- The stable release workflow verifies source/tag identity twice and removes only its own unpublished draft after failure (`.github/workflows/release.yml:327-438`).
+- The stable release workflow verifies source/tag identity twice, verifies every uploaded draft asset before publishing, and removes only its own unpublished draft after failure.
 - GitHub/Electron release downloads do not implement application-level retry or backoff; workflow reruns are the recovery mechanism.
 
 ## 5) Observability for Integrations

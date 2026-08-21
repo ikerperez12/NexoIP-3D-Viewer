@@ -268,12 +268,17 @@ async function probeRendererModelLoad(renderer, model, expectedSize, { prepareSc
     const timeoutMs = ${MODEL_LOAD_TIMEOUT_MS};
     const prepareScreenshotFrame = ${JSON.stringify(prepareScreenshotFrame)};
     const bridgeAvailable = Boolean(window.nexoip)
-      && typeof window.nexoip.listModels === 'function'
+      && typeof window.nexoip.getCatalogPage === 'function'
       && typeof window.nexoip.getModelUrl === 'function';
     if (!bridgeAvailable) throw new Error('The packaged preload bridge is unavailable during a model load.');
 
-    const models = await window.nexoip.listModels({ sortBy: 'name', order: 'asc' });
-    const model = models.find((item) => item.id === expectedModelId);
+    const catalogPage = await window.nexoip.getCatalogPage({
+      filters: { query: ${JSON.stringify(model.name)}, sortBy: 'name', order: 'asc' },
+      limit: 100,
+    });
+    const model = Array.isArray(catalogPage?.items)
+      ? catalogPage.items.find((item) => item.id === expectedModelId)
+      : null;
     if (!model) throw new Error('The registered model is missing from the packaged library.');
 
     const modelResponse = await fetch(window.nexoip.getModelUrl(expectedModelId), { cache: 'no-store' });
@@ -601,7 +606,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     let restoredAccessibilityViewport;
     try {
       rendererChecks = await renderer.executeJavaScript(`(async () => {
-      const bridgeMethods = ['listModels', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
+      const bridgeMethods = ['getCatalogPage', 'getTreeChildren', 'getCatalogNeighbor', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
       const bridgeAvailable = Boolean(window.nexoip)
         && bridgeMethods.every((method) => typeof window.nexoip[method] === 'function');
       if (!bridgeAvailable) return { bridgeAvailable: false };

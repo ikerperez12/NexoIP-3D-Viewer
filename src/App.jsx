@@ -26,10 +26,8 @@ import {
   ELECTRON_BRIDGE_ERROR,
   getNexoipBridge,
   isScanInProgress,
-  responseFiles,
   responseModel,
   responseStatus,
-  responseTree,
   validateDroppedFile
 } from './utils/nexoip.js';
 
@@ -69,14 +67,16 @@ export default function App() {
   const catalogChangeSubscriptionAvailable = supportsCatalogChangeSubscription(bridge);
   const [currentFile, setCurrentFile] = useState(null);
   const [filesList, setFilesList] = useState([]);
-  const [folderTree, setFolderTree] = useState(null);
   const [catalogState, setCatalogState] = useState(createInitialCatalogState);
   const [treePages, setTreePages] = useState({});
   const [scanStatus, setScanStatus] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanRequestPending, setScanRequestPending] = useState(false);
   const [isCancellingScan, setIsCancellingScan] = useState(false);
-  const [catalogError, setCatalogError] = useState(bridgeAvailable ? null : ELECTRON_BRIDGE_ERROR);
+  const [catalogError, setCatalogError] = useState(() => {
+    if (!bridgeAvailable) return ELECTRON_BRIDGE_ERROR;
+    return catalogV2Available ? null : 'Esta versión no incluye el catálogo paginado obligatorio.';
+  });
 
   const [renderMode, setRenderMode] = useState('pbr');
   const [envPreset, setEnvPreset] = useState('studio_pro');
@@ -212,37 +212,6 @@ export default function App() {
     return request;
   }, [bridgeAvailable]);
 
-  const loadLegacyCatalogOnce = useCallback(async ({ announce = false, preserveCurrentSelection = false } = {}) => {
-    const requestGeneration = catalogRequestGuard.begin();
-    try {
-      const [modelsResponse, treeResponse] = await Promise.all([
-        callNexoip('listModels', { sortBy: 'name', order: 'asc' }),
-        callNexoip('getTree')
-      ]);
-      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
-
-      const nextFiles = responseFiles(modelsResponse).filter((file) => file?.id);
-      setFilesList(nextFiles);
-      setFolderTree(responseTree(treeResponse));
-      const previous = currentFileRef.current;
-      const selected = previous && nextFiles.find((file) => file.id === previous.id);
-      if (selected) {
-        changeCurrentFile(selected);
-      } else if (!preserveCurrentSelection || !previous) {
-        changeCurrentFile(nextFiles[0] || null);
-      }
-      setCatalogError(null);
-      if (announce) showToast(`${nextFiles.length} modelos disponibles en la biblioteca.`);
-      return true;
-    } catch (error) {
-      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
-      const message = getErrorMessage(error, 'No se pudo cargar la biblioteca local.');
-      setCatalogError(message);
-      if (announce) showToast(message, 'error');
-      return false;
-    }
-  }, [catalogRequestGuard, changeCurrentFile, showToast]);
-
   const loadCatalogV2Once = useCallback(async ({ announce = false } = {}) => {
     const requestGeneration = catalogRequestGuard.begin();
     const previousState = catalogStateRef.current;
@@ -275,7 +244,6 @@ export default function App() {
 
       const nextCatalog = mergeCatalogPage(null, page);
       setFilesList(nextCatalog.items);
-      setFolderTree(null);
       treeRequestTokensRef.current.clear();
       updateTreePages({});
       updateCatalogState({
@@ -306,17 +274,17 @@ export default function App() {
   }, [catalogRequestGuard, changeCurrentFile, showToast, updateCatalogState, updateTreePages]);
 
   const loadCatalogOnce = useCallback((options = {}) => {
-    if (!bridgeAvailable) return Promise.resolve(false);
-    return catalogV2Available ? loadCatalogV2Once(options) : loadLegacyCatalogOnce(options);
-  }, [bridgeAvailable, catalogV2Available, loadCatalogV2Once, loadLegacyCatalogOnce]);
+    if (!bridgeAvailable || !catalogV2Available) return Promise.resolve(false);
+    return loadCatalogV2Once(options);
+  }, [bridgeAvailable, catalogV2Available, loadCatalogV2Once]);
 
   const loadCatalog = useCallback((options = {}) => {
-    if (!bridgeAvailable) return Promise.resolve(false);
+    if (!bridgeAvailable || !catalogV2Available) return Promise.resolve(false);
     if (!catalogRefreshQueueRef.current) {
       catalogRefreshQueueRef.current = createCatalogRefreshQueue(loadCatalogOnce);
     }
     return catalogRefreshQueueRef.current.request(options);
-  }, [bridgeAvailable, loadCatalogOnce]);
+  }, [bridgeAvailable, catalogV2Available, loadCatalogOnce]);
 
   const loadNextCatalogPage = useCallback(async () => {
     if (!catalogV2Available) return false;
@@ -462,7 +430,7 @@ export default function App() {
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (!bridgeAvailable) return undefined;
+    if (!bridgeAvailable || !catalogV2Available) return undefined;
     const startupTask = window.setTimeout(() => {
       void callNexoip('consumeStartupModel')
         .then((registered) => {
@@ -479,7 +447,7 @@ export default function App() {
       void refreshScanStatus().catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo consultar el escáner local.')));
     }, 0);
     return () => window.clearTimeout(startupTask);
-  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, loadCatalog, refreshScanStatus, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, refreshScanStatus, showToast]);
 
   useEffect(() => {
     const bridge = getNexoipBridge();
@@ -490,7 +458,7 @@ export default function App() {
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
       changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
-      if (catalogV2Available) void loadCatalog({ preserveCurrentSelection: true });
+      void loadCatalog({ preserveCurrentSelection: true });
     });
     return undefined;
   }, [bridgeAvailable, catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, showToast]);
@@ -647,7 +615,7 @@ export default function App() {
         showToast('No se seleccionaron carpetas. La biblioteca no se ha modificado.');
       } else if (result?.cancelled || status?.status === 'cancelled') {
         await refreshFinalScanCatalog();
-        showToast(`Escaneo detenido: ${result?.count ?? 0} modelos validados siguen disponibles.`);
+        showToast(`Escaneo detenido: ${result?.count ?? 0} modelos precomprobados siguen disponibles.`);
       } else if (active) {
         catalogRequestGuard.invalidate();
         showToast('Escaneo local en curso.');
@@ -736,25 +704,12 @@ export default function App() {
   }, [catalogV2Available, filesList, loadCatalog, navigationRequestGuard, selectFileById, showToast]);
 
   const selectRelativeModel = useCallback((offset) => {
-    if (catalogV2Available) {
-      void selectCatalogNeighbor(offset < 0 ? 'previous' : 'next');
-      return;
-    }
-    if (filesList.length === 0) return;
-    const index = currentIndex < 0 ? 0 : (currentIndex + offset + filesList.length) % filesList.length;
-    selectFileById(filesList[index].id);
-  }, [catalogV2Available, currentIndex, filesList, selectCatalogNeighbor, selectFileById]);
+    void selectCatalogNeighbor(offset < 0 ? 'previous' : 'next');
+  }, [selectCatalogNeighbor]);
 
   const handleRandomModel = useCallback(() => {
-    if (catalogV2Available) {
-      void selectCatalogNeighbor('random');
-      return;
-    }
-    if (filesList.length <= 1) return;
-    let index = Math.floor(Math.random() * filesList.length);
-    if (index === currentIndex) index = (index + 1) % filesList.length;
-    selectFileById(filesList[index].id);
-  }, [catalogV2Available, currentIndex, filesList, selectCatalogNeighbor, selectFileById]);
+    void selectCatalogNeighbor('random');
+  }, [selectCatalogNeighbor]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -836,11 +791,11 @@ export default function App() {
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
       changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
-      if (catalogV2Available) void loadCatalog({ preserveCurrentSelection: true });
+      void loadCatalog({ preserveCurrentSelection: true });
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo abrir el archivo local.'), 'error');
     }
-  }, [catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, showToast]);
+  }, [catalogRequestGuard, changeCurrentFile, loadCatalog, showToast]);
 
   const downloadBlob = useCallback((blob, fileName) => {
     const objectUrl = URL.createObjectURL(blob);
@@ -968,8 +923,8 @@ export default function App() {
         onNextModel={() => selectRelativeModel(1)}
         onRandomModel={handleRandomModel}
         currentIndex={currentIndex}
-        currentIndexKnown={!catalogV2Available || currentIndex >= 0}
-        totalCount={catalogV2Available ? catalogState.total : filesList.length}
+        currentIndexKnown={currentIndex >= 0}
+        totalCount={catalogState.total}
         sidebarTriggerRef={sidebarTriggerRef}
         inspectorTriggerRef={inspectorTriggerRef}
       />
@@ -980,8 +935,8 @@ export default function App() {
         onRequestClose={() => setSidebarOpen(false)}
         triggerRef={sidebarTriggerRef}
         files={filesList}
-        folderTree={folderTree}
-        catalogV2={catalogV2Available}
+        folderTree={null}
+        catalogV2
         catalogState={catalogState}
         treePages={treePages}
         currentFileId={currentFile?.id}

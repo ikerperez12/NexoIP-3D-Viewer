@@ -6,6 +6,7 @@ import { expect, test, vi } from 'vitest';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PRELOAD_PATH = path.join(__dirname, '..', 'electron', 'preload.cjs');
+const MAIN_PATH = path.join(__dirname, '..', 'electron', 'main.js');
 
 function loadPreloadBridge() {
   let bridge;
@@ -58,6 +59,8 @@ test('preload exposes bounded catalog APIs and rejects unsafe request shapes bef
   expect(() => bridge.getTreeChildren({ parentId: 'C:\\private' })).toThrow('Invalid tree node identifier');
   expect(() => bridge.getCatalogNeighbor({ relation: 'next', id: 'not-an-id' }))
     .toThrow('Invalid model identifier');
+  expect(bridge).not.toHaveProperty('listModels');
+  expect(bridge).not.toHaveProperty('getTree');
   expect(invoke).toHaveBeenCalledTimes(2);
 });
 
@@ -101,4 +104,14 @@ test('preload coalesces catalog metadata events and returns an unsubscribe handl
   });
   await Promise.resolve();
   expect(received).toHaveLength(1);
+});
+
+test('legacy whole-library catalog IPC is not exposed by the production boundary', () => {
+  const preloadSource = fs.readFileSync(PRELOAD_PATH, 'utf8');
+  const mainSource = fs.readFileSync(MAIN_PATH, 'utf8');
+
+  expect(preloadSource).not.toContain('nexoip:list-models');
+  expect(preloadSource).not.toContain("nexoip:get-tree'");
+  expect(mainSource).not.toContain('nexoip:list-models');
+  expect(mainSource).not.toContain("nexoip:get-tree',");
 });

@@ -72,7 +72,7 @@ export function nextRovingTabIndex(currentIndex, tabCount, key) {
 
 export function scanProgressMessage(scanStatus, isScanning) {
   if (!isScanning) {
-    if (scanStatus?.status === 'cancelled') return 'Escaneo detenido. Se conservan los modelos validados hasta la cancelación.';
+    if (scanStatus?.status === 'cancelled') return 'Escaneo detenido. Se conservan los modelos precomprobados hasta la cancelación.';
     if (scanStatus?.status === 'failed') return 'El último escaneo no pudo completarse.';
     if (scanStatus?.status === 'completed') {
       const foundModels = scanStatus?.foundModels ?? scanStatus?.foundFiles ?? 0;
@@ -95,8 +95,8 @@ export function scanProgressMessage(scanStatus, isScanning) {
   const availableModels = scanStatus?.availableModels ?? foundModels;
   const scannedDirectories = scanStatus?.scannedDirectories ?? scanStatus?.scannedFolders ?? 0;
   const availability = availableModels === foundModels
-    ? `${foundModels} modelos validados y disponibles`
-    : `${foundModels} modelos validados; ${availableModels} disponibles`;
+    ? `${foundModels} modelos precomprobados y disponibles`
+    : `${foundModels} modelos precomprobados; ${availableModels} disponibles`;
   return `Escaneando: ${availability} en ${scannedDirectories} carpetas.`;
 }
 
@@ -269,11 +269,12 @@ export default function FileLibrarySidebar({
 
       <div className="border-b border-white/10 bg-black/30 p-3">
         <div className="mb-2 flex gap-2">
-          <button type="button" onClick={onStartScan} disabled={!bridgeAvailable || isScanning} className="flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-2 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-60" aria-describedby="scan-status">{isScanning ? <RefreshCw size={14} aria-hidden="true" className="animate-spin" /> : <Sparkles size={14} aria-hidden="true" />}{isScanning ? 'Escaneando…' : 'Escanear'}</button>
-          {isScanning && <button type="button" onClick={onCancelScan} disabled={!bridgeAvailable || isCancellingScan} className="flex min-h-9 items-center justify-center gap-1 rounded-lg border border-red-400/60 bg-red-500/15 px-2 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60" aria-describedby="scan-status"><X size={14} aria-hidden="true" /> {isCancellingScan ? 'Deteniendo…' : 'Detener'}</button>}
+          <button type="button" onClick={onStartScan} disabled={!bridgeAvailable || isScanning} className="flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-2 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-60" aria-describedby="scan-status scan-preflight-note">{isScanning ? <RefreshCw size={14} aria-hidden="true" className="animate-spin" /> : <Sparkles size={14} aria-hidden="true" />}{isScanning ? 'Escaneando…' : 'Escanear'}</button>
+          {isScanning && <button type="button" onClick={onCancelScan} disabled={!bridgeAvailable || isCancellingScan} className="flex min-h-9 items-center justify-center gap-1 rounded-lg border border-red-400/60 bg-red-500/15 px-2 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60" aria-describedby="scan-status scan-preflight-note"><X size={14} aria-hidden="true" /> {isCancellingScan ? 'Deteniendo…' : 'Detener'}</button>}
           <button type="button" onClick={refresh} disabled={!bridgeAvailable || isRefreshing} className="min-h-9 min-w-9 rounded-lg border border-white/20 p-2 text-gray-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60" aria-label="Actualizar biblioteca"><RefreshCw size={15} aria-hidden="true" className={isRefreshing ? 'animate-spin' : ''} /></button>
         </div>
         <div id="scan-status" className="space-y-1 text-[11px]" role="status" aria-live="polite" aria-atomic="true"><div className="flex items-start justify-between gap-2 text-gray-200"><span>{statusMessage}</span><span className="shrink-0 font-mono font-bold text-emerald-200">{totalCached} modelos</span></div>{isScanning && <progress className="h-2 w-full accent-amber-400" aria-label="Escaneo local en curso" />}{!bridgeAvailable && <span className="block text-amber-100">Disponible solo desde la aplicación de escritorio.</span>}</div>
+        <p id="scan-preflight-note" className="mt-1 text-[10px] leading-relaxed text-gray-300">La precomprobación estructural filtra candidatos inseguros; al abrirlos, el cargador valida el modelo completo y sus recursos.</p>
       </div>
 
       <div className="border-b border-white/10 p-3">

@@ -82,7 +82,7 @@ describe('file library accessibility helpers', () => {
 
   it('reports scan progress from the scanner contract without presenting a capped library as complete', () => {
     expect(scanProgressMessage({ status: 'scanning', foundModels: 4, availableModels: 7, scannedDirectories: 9 }, true))
-      .toBe('Escaneando: 4 modelos validados; 7 disponibles en 9 carpetas.');
+      .toBe('Escaneando: 4 modelos precomprobados; 7 disponibles en 9 carpetas.');
     expect(scanProgressMessage({ status: 'completed', foundModels: 24 }, false))
       .toBe('Escaneo completo: 24 modelos compatibles indexados.');
     expect(scanProgressMessage({ status: 'completed', foundModels: 24, skippedEntries: 2, oversizedModels: 1 }, false))

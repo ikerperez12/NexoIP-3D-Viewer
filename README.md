@@ -31,7 +31,7 @@ Screenshot model: [Industrial Microscope by Lukas Walzer on Poly Haven](https://
 
 ## What the alpha does
 
-NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app. Discovery is progressive: structurally verified compatible models become available while a selected folder is still being scanned. The renderer receives bounded, revisioned catalog pages and opens folder nodes lazily, so a growing library is not copied wholesale for each refresh. There is no arbitrary cap on selected-folder depth, entry count, or model count; regular-file, canonical-path, per-file-size, and structural-validation safeguards still apply.
+NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app. Discovery is progressive: compatible models that pass a bounded structural preflight become available while a selected folder is still being scanned. Opening an entry always runs the format loader's full parse and resource checks. The renderer receives bounded, revisioned catalog pages and opens folder nodes lazily, so a growing library is not copied wholesale for each refresh. There is no arbitrary cap on selected-folder depth, entry count, or model count; regular-file, canonical-path, per-file-size, and structural-preflight safeguards still apply.
 
 The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`. The source and packaged matrices now exercise all seven extensions through ten real loads: animated GLB, external-buffer/textured glTF, required `EXT_meshopt_compression`, Draco, KTX2/Basis, textured multi-MTL OBJ, ASCII STL (with separate binary-colour unit coverage), static FBX, coloured PLY, and centimetre/Z-up textured/animated DAE. Those checks prove these representative paths inside the EXE; they do not promise complete scene, material, animation, or export fidelity for every file in a format. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
 
@@ -56,7 +56,7 @@ The existing installer and portable build are available from the [`v1.0.0` alpha
 | `*.cdx.json` | CycloneDX software bill of materials |
 | `THIRD_PARTY_NOTICES.txt` | Licenses and attribution for bundled components |
 
-The alpha Windows binaries are not Authenticode-signed. Windows may therefore show a SmartScreen warning or an organisation policy may block them entirely. Verify the SHA-256 checksum before running a download; checksums establish integrity, not publisher identity. A future stable release will require a valid trusted signature and will fail its release gate if any executable is unsigned.
+The alpha Windows binaries are not Authenticode-signed. Windows may therefore show a SmartScreen warning or an organisation policy may block them entirely. Verify the SHA-256 checksum before running a download; checksums establish integrity, not publisher identity. A future stable release will require a valid trusted signature and will fail its release gate if any executable is unsigned. See the [release verification guide](docs/RELEASE_VERIFICATION.md) for the reproducible alpha and future-stable procedures.
 
 ### Verify a download
 
@@ -65,7 +65,7 @@ Get-FileHash .\NexoIP-3D-Viewer-1.0.0-windows-x64-portable.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-The values must match exactly. Never run a binary whose checksum differs.
+The values must match exactly. Never run a binary whose checksum differs. For manifest-wide checksum, signature, expected-publisher, timestamp, and GitHub provenance verification, follow the [full guide](docs/RELEASE_VERIFICATION.md).
 
 ## Privacy and security model
 
@@ -109,7 +109,7 @@ Generated packages are written to `release/` and intentionally excluded from Git
 
 ## Quality gates
 
-Every pull request runs ESLint, unit tests, a production renderer build, dependency auditing, and CodeQL. Tagged releases rebuild from the lockfile on a GitHub-hosted Windows runner, generate checksums and an SBOM, and attach build provenance.
+Every pull request runs ESLint, unit tests, a production renderer build, dependency auditing, and CodeQL. Tagged releases rebuild from the lockfile on a GitHub-hosted Windows runner, generate checksums and an SBOM, attest the Windows binaries and SBOM independently, and verify the draft-release bytes after upload before publication.
 
 ```powershell
 npm run lint
@@ -139,6 +139,6 @@ These are alpha baseline checks. They do not yet prove complete fidelity for eve
 
 ## Contributing and license
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Security problems belong in a private report, not a public issue.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before proposing a change. Security problems belong in a private report, not a public issue.
 
 Released under the [MIT License](LICENSE). Bundled components retain their licenses and attribution in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). Copyright © 2026 Iker Perez / NexoIP.

@@ -18,7 +18,6 @@ import {
   isAllowedNavigationUrl,
   isAllowedRendererUrl,
   isOpaqueId,
-  normalizeFilters,
   normalizeDevRendererUrl,
 } from './security.js';
 import { findUnsafePackagedArguments, getPackagedSelfTestRequest } from './startup-policy.js';
@@ -169,8 +168,6 @@ function registerIpcHandler(channel, handler) {
 }
 
 function registerIpcHandlers() {
-  registerIpcHandler('nexoip:list-models', (filters) => scanner.listModels(normalizeFilters(filters)));
-  registerIpcHandler('nexoip:get-tree', () => scanner.getTree());
   registerIpcHandler('nexoip:get-catalog-page', (request) => scanner.getCatalogPage(request));
   registerIpcHandler('nexoip:get-tree-children', (request) => scanner.getTreeChildren(request));
   registerIpcHandler('nexoip:get-catalog-neighbor', (request) => scanner.getCatalogNeighbor(request));

@@ -5,7 +5,7 @@
 | Area | Value | Evidence |
 | --- | --- | --- |
 | Primary language | JavaScript and JSX, using ECMAScript modules except for the CommonJS preload | `package.json:10`, `src/main.jsx:1`, `electron/preload.cjs:1` |
-| Desktop runtime | Electron 43.4.0 on Windows x64 | `package.json:55`, `package.json:95` |
+| Desktop runtime | Electron 43.4.1 on Windows x64 | `package.json`, Electron build configuration |
 | Development runtime | Node.js 24.12.0 or newer and npm 11 or newer | `package.json:21`, `README.md:90` |
 | Package manager | npm with lockfile v3, exact versions and engine enforcement | `package-lock.json:4`, `.npmrc:1`, `.npmrc:2` |
 | Module/build system | Electron main process, Vite 8 renderer build and electron-builder 26 packaging | `package.json:11`, `package.json:27`, `package.json:55`, `package.json:56` |
@@ -14,7 +14,7 @@
 
 | Dependency | Version | Role in system | Evidence |
 | --- | --- | --- | --- |
-| Electron | 43.4.0 | Bundled desktop runtime; installed as development tooling but shipped by electron-builder | `package.json:55`, `package.json:72` |
+| Electron | 43.4.1 | Bundled desktop runtime; installed as development tooling but shipped by electron-builder | `package.json`, Electron build configuration |
 | React / React DOM | 18.3.1 | Renderer component and state model | `package.json:45`, `package.json:46`, `src/main.jsx:1` |
 | Three.js | 0.165.0 | WebGL scene, cameras, loaders, controls and exporters | `package.json:47`, `src/components/Viewport3D.jsx:2`, `src/utils/loaders.js:1` |
 | Lucide React | 0.395.0 | UI icon components | `package.json:44`, `src/App.jsx:7` |

@@ -25,7 +25,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 - IPC validates sender, top frame, origin, types, sizes and identifiers. No filesystem path is exposed to renderer code.
 - Navigation, pop-ups, webviews, permissions, remote subresources and production debugging switches are denied.
 - Asset reads are allowlisted, size-bounded, contained after canonicalisation and served without a check-then-reopen race.
-- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can be indexed within the per-asset safety policy is discovered under the folders the user explicitly selects; newly validated entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. No automatic disk scan, telemetry, analytics, account or network service is introduced.
+- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can pass the bounded structural preflight within the per-asset safety policy is discovered under the folders the user explicitly selects; those prechecked entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. Opening an entry still requires the loader's full parse and resource checks. No automatic disk scan, telemetry, analytics, account or network service is introduced.
 - Exact dependencies and immutable GitHub Actions references pass dependency audit, CodeQL and secret scanning.
 - The release SBOM identifies the Electron/Chromium runtime that is actually distributed, and both binaries and SBOM have build provenance.
 - Every NexoIP-owned executable is Authenticode-signed with the expected publisher identity and a trusted timestamp. Runtime PE signatures are inventoried and verified against an explicit vendor policy. `NotSigned` on a project-owned executable is a hard release failure.
@@ -58,6 +58,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 - Windows 10 and Windows 11 x64 are tested, including a software-rendering or constrained-GPU scenario.
 - The packaged application runs offline and contains only the intended renderer, Electron boundary code, licences and notices.
 - Checksums, SBOM, provenance and signature verification instructions match the exact uploaded files.
+- The workflow downloads the reserved draft assets and verifies their exact names, sizes, and SHA-256 values before it can publish the release.
 - The package advances to a fresh SemVer version; existing tags such as `v1.0.0` are never moved or reused.
 - The new release tag exactly matches the package version and points to the reviewed commit on the protected main branch.
 

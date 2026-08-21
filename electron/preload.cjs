@@ -158,14 +158,6 @@ ipcRenderer.on('nexoip:catalog-changed', (_event, change) => {
 });
 
 const nexoip = Object.freeze({
-  listModels(filters) {
-    return ipcRenderer.invoke('nexoip:list-models', sanitizeFilters(filters));
-  },
-
-  getTree() {
-    return ipcRenderer.invoke('nexoip:get-tree');
-  },
-
   getCatalogPage(request) {
     return ipcRenderer.invoke('nexoip:get-catalog-page', sanitizeCatalogPageRequest(request));
   },
