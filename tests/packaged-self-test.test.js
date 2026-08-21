@@ -180,7 +180,9 @@ test('packaged self-test accepts the unique ten-entry shared format matrix', asy
       tokenDigest: capability.tokenDigest,
     });
 
-    expect(config.fixturePaths).toEqual(fixturePaths);
+    expect(config.fixturePaths).toEqual(await Promise.all(
+      fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
   } finally {
     await prepared.cleanup();
   }
