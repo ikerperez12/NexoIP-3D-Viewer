@@ -13,6 +13,11 @@ const APP_PATH = path.resolve('release', 'win-unpacked', 'NexoIP 3D Viewer.exe')
 const DIAGNOSTICS_DIRECTORY = path.resolve('test-results');
 const TIMEOUT_MS = 180_000;
 const REPORT_EXIT_GRACE_MS = 15_000;
+// A cold Electron executable can spend several seconds in Windows process
+// startup before main.js rejects the unsafe switch. This is still before a
+// BrowserWindow is created; keep the negative smoke assertion bounded without
+// making it flaky on busy or freshly provisioned Windows runners.
+const STARTUP_REJECTION_TIMEOUT_MS = 30_000;
 const FILE_POLL_INTERVAL_MS = 100;
 const REQUIRED_LOCALES = ['en-GB.pak', 'en-US.pak', 'es-419.pak', 'es.pak'];
 
@@ -190,7 +195,11 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
 
   try {
     const result = assertSuccessfulExit(
-      await waitForObservedTermination(terminationObserver, 10_000, 'Dangerous startup argument rejection'),
+      await waitForObservedTermination(
+        terminationObserver,
+        STARTUP_REJECTION_TIMEOUT_MS,
+        'Dangerous startup argument rejection',
+      ),
       'Dangerous startup argument rejection',
     );
     assert(result.code === 78, `Unsafe startup argument was not rejected with exit code 78 (got ${result.code}).`);

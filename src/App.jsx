@@ -7,9 +7,18 @@ import DropZone from './components/DropZone.jsx';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import { exportModelAsGlb } from './utils/exporters.js';
 import {
+  CATALOG_PAGE_LIMIT,
+  CATALOG_TREE_ROOT_PAGE_KEY,
   createCatalogRefreshQueue,
   createCatalogRequestGuard,
   getPublishedModelCount,
+  mergeCatalogPage,
+  normalizeCatalogFilters,
+  responseCatalogChange,
+  responseCatalogNeighbor,
+  responseCatalogPage,
+  supportsCatalogChangeSubscription,
+  supportsCatalogV2,
 } from './utils/catalog-request.js';
 import { prefersReducedMotion } from './utils/motion-preference.js';
 import {
@@ -34,11 +43,35 @@ function getErrorMessage(error, fallback) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function createInitialCatalogState() {
+  return {
+    catalogRevision: null,
+    scanId: null,
+    total: 0,
+    nextCursor: null,
+    filters: normalizeCatalogFilters(),
+    isLoading: false,
+    isLoadingMore: false,
+  };
+}
+
+function sameCatalogFilters(left, right) {
+  return left.query === right.query
+    && left.extension === right.extension
+    && left.sortBy === right.sortBy
+    && left.order === right.order;
+}
+
 export default function App() {
-  const bridgeAvailable = Boolean(getNexoipBridge());
+  const bridge = getNexoipBridge();
+  const bridgeAvailable = Boolean(bridge);
+  const catalogV2Available = supportsCatalogV2(bridge);
+  const catalogChangeSubscriptionAvailable = supportsCatalogChangeSubscription(bridge);
   const [currentFile, setCurrentFile] = useState(null);
   const [filesList, setFilesList] = useState([]);
   const [folderTree, setFolderTree] = useState(null);
+  const [catalogState, setCatalogState] = useState(createInitialCatalogState);
+  const [treePages, setTreePages] = useState({});
   const [scanStatus, setScanStatus] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanRequestPending, setScanRequestPending] = useState(false);
@@ -78,11 +111,26 @@ export default function App() {
   const sidebarTriggerRef = useRef(null);
   const inspectorTriggerRef = useRef(null);
   const currentFileRef = useRef(null);
+  const catalogStateRef = useRef(createInitialCatalogState());
+  const treePagesRef = useRef({});
+  const treeRequestTokensRef = useRef(new Map());
   const scanStatusRequestRef = useRef(null);
   const publishedCatalogCountRef = useRef(null);
   const finalScanCatalogRefreshRef = useRef(null);
   const catalogRefreshQueueRef = useRef(null);
   const [catalogRequestGuard] = useState(createCatalogRequestGuard);
+  const [navigationRequestGuard] = useState(createCatalogRequestGuard);
+  const latestCatalogChangeRevisionRef = useRef(null);
+
+  const updateCatalogState = useCallback((nextState) => {
+    catalogStateRef.current = nextState;
+    setCatalogState(nextState);
+  }, []);
+
+  const updateTreePages = useCallback((nextPages) => {
+    treePagesRef.current = nextPages;
+    setTreePages(nextPages);
+  }, []);
 
   const clearLoadedModelState = useCallback(() => {
     setModelData(null);
@@ -164,10 +212,8 @@ export default function App() {
     return request;
   }, [bridgeAvailable]);
 
-  const loadCatalogOnce = useCallback(async ({ announce = false, preserveCurrentSelection = false } = {}) => {
-    if (!bridgeAvailable) return false;
+  const loadLegacyCatalogOnce = useCallback(async ({ announce = false, preserveCurrentSelection = false } = {}) => {
     const requestGeneration = catalogRequestGuard.begin();
-
     try {
       const [modelsResponse, treeResponse] = await Promise.all([
         callNexoip('listModels', { sortBy: 'name', order: 'asc' }),
@@ -190,13 +236,79 @@ export default function App() {
       return true;
     } catch (error) {
       if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
-
       const message = getErrorMessage(error, 'No se pudo cargar la biblioteca local.');
       setCatalogError(message);
       if (announce) showToast(message, 'error');
       return false;
     }
-  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, showToast]);
+  }, [catalogRequestGuard, changeCurrentFile, showToast]);
+
+  const loadCatalogV2Once = useCallback(async ({ announce = false } = {}) => {
+    const requestGeneration = catalogRequestGuard.begin();
+    const previousState = catalogStateRef.current;
+    const filters = previousState.filters;
+    updateCatalogState({
+      ...previousState,
+      isLoading: true,
+      isLoadingMore: false,
+      nextCursor: null,
+    });
+
+    try {
+      let page = responseCatalogPage(await callNexoip('getCatalogPage', {
+        filters,
+        limit: CATALOG_PAGE_LIMIT,
+      }));
+      if (!page || page.items.length > CATALOG_PAGE_LIMIT) {
+        throw new Error('La respuesta paginada de la biblioteca no es válida.');
+      }
+      if (page.reset) {
+        page = responseCatalogPage(await callNexoip('getCatalogPage', {
+          filters,
+          limit: CATALOG_PAGE_LIMIT,
+        }));
+        if (!page || page.reset || page.items.length > CATALOG_PAGE_LIMIT) {
+          throw new Error('La biblioteca cambió antes de poder actualizarse.');
+        }
+      }
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+
+      const nextCatalog = mergeCatalogPage(null, page);
+      setFilesList(nextCatalog.items);
+      setFolderTree(null);
+      treeRequestTokensRef.current.clear();
+      updateTreePages({});
+      updateCatalogState({
+        ...previousState,
+        ...nextCatalog,
+        filters,
+        isLoading: false,
+        isLoadingMore: false,
+      });
+      setIsScanning(page.isScanning);
+
+      const previous = currentFileRef.current;
+      const selected = previous && nextCatalog.items.find((file) => file.id === previous.id);
+      if (selected) changeCurrentFile(selected);
+      else if (!previous) changeCurrentFile(nextCatalog.items[0] || null);
+
+      setCatalogError(null);
+      if (announce) showToast(`${nextCatalog.total} modelos disponibles en la biblioteca.`);
+      return true;
+    } catch (error) {
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+      updateCatalogState({ ...catalogStateRef.current, isLoading: false, isLoadingMore: false });
+      const message = getErrorMessage(error, 'No se pudo cargar la biblioteca local.');
+      setCatalogError(message);
+      if (announce) showToast(message, 'error');
+      return false;
+    }
+  }, [catalogRequestGuard, changeCurrentFile, showToast, updateCatalogState, updateTreePages]);
+
+  const loadCatalogOnce = useCallback((options = {}) => {
+    if (!bridgeAvailable) return Promise.resolve(false);
+    return catalogV2Available ? loadCatalogV2Once(options) : loadLegacyCatalogOnce(options);
+  }, [bridgeAvailable, catalogV2Available, loadCatalogV2Once, loadLegacyCatalogOnce]);
 
   const loadCatalog = useCallback((options = {}) => {
     if (!bridgeAvailable) return Promise.resolve(false);
@@ -205,6 +317,142 @@ export default function App() {
     }
     return catalogRefreshQueueRef.current.request(options);
   }, [bridgeAvailable, loadCatalogOnce]);
+
+  const loadNextCatalogPage = useCallback(async () => {
+    if (!catalogV2Available) return false;
+
+    const snapshot = catalogStateRef.current;
+    if (snapshot.catalogRevision === null || !snapshot.nextCursor || snapshot.isLoading || snapshot.isLoadingMore) {
+      return false;
+    }
+
+    const requestGeneration = catalogRequestGuard.begin();
+    updateCatalogState({ ...snapshot, isLoadingMore: true });
+    try {
+      const page = responseCatalogPage(await callNexoip('getCatalogPage', {
+        revision: snapshot.catalogRevision,
+        cursor: snapshot.nextCursor,
+        filters: snapshot.filters,
+        limit: CATALOG_PAGE_LIMIT,
+      }));
+      if (!page || page.items.length > CATALOG_PAGE_LIMIT) {
+        throw new Error('La siguiente página de la biblioteca no es válida.');
+      }
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+      if (page.reset || page.catalogRevision !== snapshot.catalogRevision) {
+        updateCatalogState({ ...catalogStateRef.current, isLoadingMore: false });
+        return loadCatalog({ preserveCurrentSelection: true });
+      }
+
+      const nextCatalog = mergeCatalogPage(snapshot, page, { append: true });
+      setFilesList(nextCatalog.items);
+      updateCatalogState({
+        ...catalogStateRef.current,
+        ...nextCatalog,
+        filters: snapshot.filters,
+        isLoading: false,
+        isLoadingMore: false,
+      });
+      const current = currentFileRef.current;
+      const refreshedCurrent = current && nextCatalog.items.find((file) => file.id === current.id);
+      if (refreshedCurrent) changeCurrentFile(refreshedCurrent);
+      setIsScanning(page.isScanning);
+      return true;
+    } catch (error) {
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+      updateCatalogState({ ...catalogStateRef.current, isLoadingMore: false });
+      setCatalogError(getErrorMessage(error, 'No se pudo cargar más modelos de la biblioteca.'));
+      return false;
+    }
+  }, [catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, updateCatalogState]);
+
+  const loadTreeChildren = useCallback(async (parentId, { append = false } = {}) => {
+    if (!catalogV2Available) return false;
+
+    const pageKey = parentId || CATALOG_TREE_ROOT_PAGE_KEY;
+    const snapshot = catalogStateRef.current;
+    const existingPage = treePagesRef.current[pageKey];
+    if (snapshot.catalogRevision === null || existingPage?.isLoading || (append && !existingPage?.nextCursor)) {
+      return false;
+    }
+
+    const token = Symbol(`tree:${pageKey}`);
+    treeRequestTokensRef.current.set(pageKey, token);
+    updateTreePages({
+      ...treePagesRef.current,
+      [pageKey]: {
+        ...existingPage,
+        items: append ? existingPage?.items || [] : [],
+        isLoading: true,
+        error: null,
+      },
+    });
+
+    try {
+      const page = responseCatalogPage(await callNexoip('getTreeChildren', {
+        ...(parentId ? { parentId } : {}),
+        revision: snapshot.catalogRevision,
+        ...(append ? { cursor: existingPage.nextCursor } : {}),
+        limit: CATALOG_PAGE_LIMIT,
+      }));
+      if (!page || page.items.length > CATALOG_PAGE_LIMIT) {
+        throw new Error('La respuesta paginada del árbol no es válida.');
+      }
+      if (treeRequestTokensRef.current.get(pageKey) !== token) return false;
+      if (page.reset || page.catalogRevision !== snapshot.catalogRevision) {
+        const nextPages = { ...treePagesRef.current };
+        delete nextPages[pageKey];
+        updateTreePages(nextPages);
+        return loadCatalog({ preserveCurrentSelection: true });
+      }
+
+      const nextPage = mergeCatalogPage(existingPage, page, { append });
+      updateTreePages({
+        ...treePagesRef.current,
+        [pageKey]: {
+          ...nextPage,
+          isLoading: false,
+          error: null,
+        },
+      });
+      setIsScanning(page.isScanning);
+      return true;
+    } catch (error) {
+      if (treeRequestTokensRef.current.get(pageKey) !== token) return false;
+      updateTreePages({
+        ...treePagesRef.current,
+        [pageKey]: {
+          ...existingPage,
+          items: append ? existingPage?.items || [] : [],
+          isLoading: false,
+          error: getErrorMessage(error, 'No se pudo cargar esta carpeta.'),
+        },
+      });
+      return false;
+    }
+  }, [catalogV2Available, loadCatalog, updateTreePages]);
+
+  const handleCatalogFiltersChange = useCallback((filters) => {
+    if (!catalogV2Available) return;
+    const normalizedFilters = normalizeCatalogFilters(filters);
+    const previousState = catalogStateRef.current;
+    if (sameCatalogFilters(previousState.filters, normalizedFilters)) return;
+
+    catalogRequestGuard.invalidate();
+    navigationRequestGuard.invalidate();
+    treeRequestTokensRef.current.clear();
+    updateTreePages({});
+    setFilesList([]);
+    updateCatalogState({
+      ...previousState,
+      filters: normalizedFilters,
+      total: 0,
+      nextCursor: null,
+      isLoading: true,
+      isLoadingMore: false,
+    });
+    void loadCatalog({ preserveCurrentSelection: true });
+  }, [catalogRequestGuard, catalogV2Available, loadCatalog, navigationRequestGuard, updateCatalogState, updateTreePages]);
 
   const refreshFinalScanCatalog = useCallback(() => {
     if (!finalScanCatalogRefreshRef.current) {
@@ -242,12 +490,73 @@ export default function App() {
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
       changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
+      if (catalogV2Available) void loadCatalog({ preserveCurrentSelection: true });
     });
     return undefined;
-  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, showToast]);
 
   useEffect(() => {
-    if (!bridgeAvailable || (!isScanning && !scanRequestPending)) return undefined;
+    if (!bridgeAvailable || !catalogChangeSubscriptionAvailable) return undefined;
+    const bridge = getNexoipBridge();
+    let disposed = false;
+    let unsubscribe = null;
+
+    try {
+      unsubscribe = bridge.subscribeCatalogChanges((event) => {
+        if (disposed) return;
+        const change = responseCatalogChange(event);
+        if (!change) return;
+
+        const currentRevision = catalogStateRef.current.catalogRevision;
+        const latestRevision = latestCatalogChangeRevisionRef.current;
+        if ((latestRevision !== null && change.catalogRevision < latestRevision)
+          || (currentRevision !== null && change.catalogRevision < currentRevision)) {
+          return;
+        }
+        latestCatalogChangeRevisionRef.current = change.catalogRevision;
+        setScanStatus((previous) => ({
+          ...previous,
+          catalogRevision: change.catalogRevision,
+          scanId: change.scanId,
+          foundModels: change.modelCount,
+          availableModels: change.modelCount,
+          isScanning: change.isScanning,
+          status: change.status,
+        }));
+        setIsScanning(change.isScanning);
+        scanWasActiveRef.current = change.isScanning;
+
+        if (currentRevision === change.catalogRevision) return;
+
+        catalogRequestGuard.invalidate();
+        navigationRequestGuard.invalidate();
+        treeRequestTokensRef.current.clear();
+        updateTreePages({});
+        void loadCatalog({ preserveCurrentSelection: true });
+      });
+    } catch (error) {
+      queueMicrotask(() => {
+        if (!disposed) setCatalogError(getErrorMessage(error, 'No se pudieron recibir los cambios de la biblioteca.'));
+      });
+    }
+
+    return () => {
+      disposed = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [
+    bridgeAvailable,
+    catalogChangeSubscriptionAvailable,
+    catalogRequestGuard,
+    loadCatalog,
+    navigationRequestGuard,
+    updateTreePages,
+  ]);
+
+  useEffect(() => {
+    if (!bridgeAvailable
+      || catalogChangeSubscriptionAvailable
+      || (!isScanning && !scanRequestPending)) return undefined;
 
     const reportPollingError = (error) => {
       const message = getErrorMessage(error, 'No se pudo actualizar el progreso del escaneo.');
@@ -305,6 +614,7 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [
     bridgeAvailable,
+    catalogChangeSubscriptionAvailable,
     catalogRequestGuard,
     isScanning,
     loadCatalog,
@@ -376,8 +686,11 @@ export default function App() {
     }
   }, [bridgeAvailable, isCancellingScan, showToast]);
 
-  const selectFileById = useCallback((fileId) => {
-    const nextFile = filesList.find((file) => file.id === fileId);
+  const selectFileById = useCallback((fileOrId) => {
+    const fileId = typeof fileOrId === 'string' ? fileOrId : fileOrId?.id;
+    const nextFile = typeof fileOrId === 'object' && fileOrId?.id
+      ? fileOrId
+      : filesList.find((file) => file.id === fileId);
     if (!nextFile) {
       showToast('El modelo seleccionado ya no está disponible. Actualiza la biblioteca.', 'error');
       return;
@@ -386,18 +699,62 @@ export default function App() {
     showToast(`Cargando ${nextFile.name}…`);
   }, [changeCurrentFile, filesList, showToast]);
 
+  const selectCatalogNeighbor = useCallback(async (relation) => {
+    if (!catalogV2Available) return false;
+    const snapshot = catalogStateRef.current;
+    const current = currentFileRef.current;
+    if (snapshot.catalogRevision === null || (relation !== 'random' && !current?.id)) {
+      if (!current && filesList[0]) selectFileById(filesList[0]);
+      return false;
+    }
+
+    const requestGeneration = navigationRequestGuard.begin();
+    try {
+      const neighbor = responseCatalogNeighbor(await callNexoip('getCatalogNeighbor', {
+        relation,
+        ...(current?.id ? { id: current.id } : {}),
+        revision: snapshot.catalogRevision,
+        filters: snapshot.filters,
+      }));
+      if (!navigationRequestGuard.isCurrent(requestGeneration)) return false;
+      if (!neighbor) throw new Error('La respuesta de navegación de la biblioteca no es válida.');
+      if (neighbor.reset || neighbor.catalogRevision !== snapshot.catalogRevision) {
+        await loadCatalog({ preserveCurrentSelection: true });
+        return false;
+      }
+      if (!neighbor.model) {
+        showToast('No hay otro modelo disponible con los filtros actuales.');
+        return false;
+      }
+      selectFileById(neighbor.model);
+      return true;
+    } catch (error) {
+      if (!navigationRequestGuard.isCurrent(requestGeneration)) return false;
+      showToast(getErrorMessage(error, 'No se pudo cambiar de modelo.'), 'error');
+      return false;
+    }
+  }, [catalogV2Available, filesList, loadCatalog, navigationRequestGuard, selectFileById, showToast]);
+
   const selectRelativeModel = useCallback((offset) => {
+    if (catalogV2Available) {
+      void selectCatalogNeighbor(offset < 0 ? 'previous' : 'next');
+      return;
+    }
     if (filesList.length === 0) return;
     const index = currentIndex < 0 ? 0 : (currentIndex + offset + filesList.length) % filesList.length;
     selectFileById(filesList[index].id);
-  }, [currentIndex, filesList, selectFileById]);
+  }, [catalogV2Available, currentIndex, filesList, selectCatalogNeighbor, selectFileById]);
 
   const handleRandomModel = useCallback(() => {
+    if (catalogV2Available) {
+      void selectCatalogNeighbor('random');
+      return;
+    }
     if (filesList.length <= 1) return;
     let index = Math.floor(Math.random() * filesList.length);
     if (index === currentIndex) index = (index + 1) % filesList.length;
     selectFileById(filesList[index].id);
-  }, [currentIndex, filesList, selectFileById]);
+  }, [catalogV2Available, currentIndex, filesList, selectCatalogNeighbor, selectFileById]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -479,10 +836,11 @@ export default function App() {
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
       changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
+      if (catalogV2Available) void loadCatalog({ preserveCurrentSelection: true });
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo abrir el archivo local.'), 'error');
     }
-  }, [catalogRequestGuard, changeCurrentFile, showToast]);
+  }, [catalogRequestGuard, catalogV2Available, changeCurrentFile, loadCatalog, showToast]);
 
   const downloadBlob = useCallback((blob, fileName) => {
     const objectUrl = URL.createObjectURL(blob);
@@ -610,7 +968,8 @@ export default function App() {
         onNextModel={() => selectRelativeModel(1)}
         onRandomModel={handleRandomModel}
         currentIndex={currentIndex}
-        totalCount={filesList.length}
+        currentIndexKnown={!catalogV2Available || currentIndex >= 0}
+        totalCount={catalogV2Available ? catalogState.total : filesList.length}
         sidebarTriggerRef={sidebarTriggerRef}
         inspectorTriggerRef={inspectorTriggerRef}
       />
@@ -622,10 +981,16 @@ export default function App() {
         triggerRef={sidebarTriggerRef}
         files={filesList}
         folderTree={folderTree}
+        catalogV2={catalogV2Available}
+        catalogState={catalogState}
+        treePages={treePages}
         currentFileId={currentFile?.id}
         onSelectFile={selectFileById}
         onRevealFile={handleRevealModel}
         onRefresh={() => loadCatalog({ announce: true })}
+        onLoadMoreCatalog={loadNextCatalogPage}
+        onLoadTreeChildren={loadTreeChildren}
+        onCatalogFiltersChange={handleCatalogFiltersChange}
         onStartScan={handleStartScan}
         onCancelScan={handleCancelScan}
         scanStatus={scanStatus}

@@ -7,11 +7,25 @@ import { FileScanner, MAX_MODEL_BYTES } from '../electron/file-scanner.js';
 
 const MINIMAL_GLTF = JSON.stringify({ asset: { version: '2.0' } });
 
-function minimalGlb(byteLength = 12) {
+function minimalGlb(binaryByteLength = 0) {
+  const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+  const paddedJsonLength = Math.ceil(json.length / 4) * 4;
+  const paddedBinaryLength = Math.ceil(binaryByteLength / 4) * 4;
+  const includesBinaryChunk = paddedBinaryLength > 0;
+  const byteLength = 20 + paddedJsonLength + (includesBinaryChunk ? 8 + paddedBinaryLength : 0);
   const bytes = Buffer.alloc(byteLength);
   bytes.writeUInt32LE(0x46546C67, 0);
   bytes.writeUInt32LE(2, 4);
   bytes.writeUInt32LE(byteLength, 8);
+  bytes.writeUInt32LE(paddedJsonLength, 12);
+  bytes.writeUInt32LE(0x4E4F534A, 16);
+  json.copy(bytes, 20);
+  bytes.fill(0x20, 20 + json.length, 20 + paddedJsonLength);
+  if (includesBinaryChunk) {
+    const binaryChunkOffset = 20 + paddedJsonLength;
+    bytes.writeUInt32LE(paddedBinaryLength, binaryChunkOffset);
+    bytes.writeUInt32LE(0x004E4942, binaryChunkOffset + 4);
+  }
   return bytes;
 }
 

@@ -25,7 +25,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 - IPC validates sender, top frame, origin, types, sizes and identifiers. No filesystem path is exposed to renderer code.
 - Navigation, pop-ups, webviews, permissions, remote subresources and production debugging switches are denied.
 - Asset reads are allowlisted, size-bounded, contained after canonicalisation and served without a check-then-reopen race.
-- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can be indexed within the per-asset safety policy is discovered under the folders the user explicitly selects; no automatic disk scan, telemetry, analytics, account or network service is introduced.
+- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can be indexed within the per-asset safety policy is discovered under the folders the user explicitly selects; newly validated entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. No automatic disk scan, telemetry, analytics, account or network service is introduced.
 - Exact dependencies and immutable GitHub Actions references pass dependency audit, CodeQL and secret scanning.
 - The release SBOM identifies the Electron/Chromium runtime that is actually distributed, and both binaries and SBOM have build provenance.
 - Every NexoIP-owned executable is Authenticode-signed with the expected publisher identity and a trusted timestamp. Runtime PE signatures are inventoried and verified against an explicit vendor policy. `NotSigned` on a project-owned executable is a hard release failure.
@@ -34,7 +34,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 ### 2. Format correctness and resource safety
 
 - Each advertised format has a small, redistributable positive fixture and malformed/unsupported negative fixtures.
-- A decoded-resource budget covers node depth/count, vertices, triangles, materials, animations, textures and total texture pixels in addition to file bytes.
+- A per-load aggregate source budget bounds streamed model resources and requests (including local sidecars and decoder assets), while a decoded-resource budget covers node depth/count, vertices, triangles, materials, animations, textures and total texture pixels.
 - Oversized, deeply nested, truncated and decompression-heavy inputs fail with a recoverable message rather than leaving stale content or an unusable shell.
 - Loading and scanning can be cancelled. Switching models cannot commit an obsolete load.
 - Camera clipping adapts to model bounds, including large-unit CAD-style assets.

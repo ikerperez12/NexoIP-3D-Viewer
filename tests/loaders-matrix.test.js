@@ -262,8 +262,33 @@ describe('redistributable on-disk format matrix', () => {
     await expect(loadFixture('obj-multimtl/multi-material.obj', {
       budget: { ...DEFAULT_MODEL_BUDGET, maxTexturePixels: 1 }
     })).rejects.toMatchObject({ code: 'MODEL_BUDGET_TEXTUREPIXELS' });
-    expect(imageLoads.size).toBeGreaterThan(0);
-    await Promise.all(imageLoads);
+    expect(requestedPaths()).toEqual(expect.arrayContaining([
+      '/model/format-matrix/obj-multimtl/warm-texture.png',
+      '/model/format-matrix/obj-multimtl/cool-texture.png'
+    ]));
+  });
+
+  it('applies the aggregate source-byte budget to glTF image sidecars while they are fetched', async () => {
+    const [manifest, binary, texture] = await Promise.all([
+      readFile(path.join(fixtureRoot, 'gltf-simple-texture/SimpleTexture.gltf')),
+      readFile(path.join(fixtureRoot, 'gltf-simple-texture/SimpleTexture.bin')),
+      readFile(path.join(fixtureRoot, 'gltf-simple-texture/testTexture.png'))
+    ]);
+    const limit = manifest.byteLength + binary.byteLength + texture.byteLength - 1;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(loadFixture('gltf-simple-texture/SimpleTexture.gltf', {
+        budget: { ...DEFAULT_MODEL_BUDGET, maxSourceBytes: limit }
+      })).rejects.toMatchObject({ code: 'MODEL_BUDGET_SOURCEBYTES', limit });
+    } finally {
+      consoleError.mockRestore();
+    }
+    expect(requestedPaths()).toEqual(expect.arrayContaining([
+      '/model/format-matrix/gltf-simple-texture/SimpleTexture.gltf',
+      '/model/format-matrix/gltf-simple-texture/SimpleTexture.bin',
+      '/model/format-matrix/gltf-simple-texture/testTexture.png'
+    ]));
   });
 
   it('parses the compact CC0 static FBX fixture', async () => {

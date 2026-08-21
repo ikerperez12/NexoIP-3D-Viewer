@@ -7,11 +7,25 @@ import { FileScanner } from '../electron/file-scanner.js';
 const MINIMAL_GLTF = JSON.stringify({ asset: { version: '2.0' } });
 const MINIMAL_OBJ = 'o Triangle\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
 
-function minimalGlb(byteLength = 12) {
+function minimalGlb(binaryByteLength = 0) {
+  const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+  const paddedJsonLength = Math.ceil(json.length / 4) * 4;
+  const paddedBinaryLength = Math.ceil(binaryByteLength / 4) * 4;
+  const includesBinaryChunk = paddedBinaryLength > 0;
+  const byteLength = 20 + paddedJsonLength + (includesBinaryChunk ? 8 + paddedBinaryLength : 0);
   const bytes = Buffer.alloc(byteLength);
   bytes.writeUInt32LE(0x46546C67, 0);
   bytes.writeUInt32LE(2, 4);
   bytes.writeUInt32LE(byteLength, 8);
+  bytes.writeUInt32LE(paddedJsonLength, 12);
+  bytes.writeUInt32LE(0x4E4F534A, 16);
+  json.copy(bytes, 20);
+  bytes.fill(0x20, 20 + json.length, 20 + paddedJsonLength);
+  if (includesBinaryChunk) {
+    const binaryChunkOffset = 20 + paddedJsonLength;
+    bytes.writeUInt32LE(paddedBinaryLength, binaryChunkOffset);
+    bytes.writeUInt32LE(0x004E4942, binaryChunkOffset + 4);
+  }
   return bytes;
 }
 
@@ -136,6 +150,31 @@ test('scanner rejects malformed extension-shaped candidates and accepts lightwei
   });
 });
 
+test('scanner requires a GLB JSON chunk and still accepts the minimal glTF 2.0 container', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const headerOnlyPath = path.join(directory, 'header-only.glb');
+    const validPath = path.join(directory, 'minimal.glb');
+    const headerOnly = Buffer.alloc(12);
+    headerOnly.writeUInt32LE(0x46546C67, 0);
+    headerOnly.writeUInt32LE(2, 4);
+    headerOnly.writeUInt32LE(headerOnly.length, 8);
+    await Promise.all([
+      fs.promises.writeFile(headerOnlyPath, headerOnly),
+      fs.promises.writeFile(validPath, minimalGlb()),
+    ]);
+
+    const scanner = new FileScanner();
+    await expect(scanner.scanDirectories([directory])).resolves.toEqual({
+      status: 'completed',
+      count: 1,
+      truncated: false,
+    });
+    expect(scanner.listModels().map((model) => model.name)).toEqual(['minimal.glb']);
+    expect(scanner.getStatus()).toMatchObject({ invalidModels: 1, foundModels: 1 });
+    await expect(scanner.registerDroppedPath(headerOnlyPath)).rejects.toThrow('Invalid dropped file');
+  });
+});
+
 test('scanner has no implicit roots and restores state after invalid input', async () => {
   const scanner = new FileScanner();
   await expect(scanner.scanDirectories()).rejects.toThrow(/Choose one or more/);
@@ -150,6 +189,8 @@ test('scanner has no implicit roots and restores state after invalid input', asy
     invalidModels: 0,
     selectedFolderCount: 0,
     truncated: false,
+    catalogRevision: 2,
+    scanId: 1,
   });
 });
 
@@ -175,6 +216,86 @@ test('scanner indexes more selected roots than the former safety cap', async () 
   });
 });
 
+test('scanner cancels a dense DFS traversal before retaining unvisited directory siblings', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const canonicalDirectory = await fs.promises.realpath(directory);
+    const childCount = 2_048;
+    const childPrefix = canonicalDirectory + path.sep + 'dense-';
+    const virtualDirectoryStats = {
+      isDirectory: () => true,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+    };
+    const isVirtualChild = (candidatePath) => typeof candidatePath === 'string'
+      && candidatePath.startsWith(childPrefix)
+      && path.dirname(candidatePath) === canonicalDirectory;
+    const originalLstat = fs.promises.lstat;
+    const originalRealpath = fs.promises.realpath;
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (candidatePath, ...args) => (
+      isVirtualChild(candidatePath)
+        ? virtualDirectoryStats
+        : originalLstat(candidatePath, ...args)
+    ));
+    const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (candidatePath, ...args) => (
+      isVirtualChild(candidatePath)
+        ? candidatePath
+        : originalRealpath(candidatePath, ...args)
+    ));
+    let rootEntriesYielded = 0;
+    let firstChildOpenedAfterEntries = null;
+    let signalFirstChildOpened;
+    const firstChildOpened = new Promise((resolve) => { signalFirstChildOpened = resolve; });
+
+    try {
+      const scanner = new FileScanner({
+        openDirectory: async (directoryPath) => {
+          if (directoryPath === canonicalDirectory) {
+            return {
+              async *[Symbol.asyncIterator]() {
+                for (let index = 0; index < childCount; index += 1) {
+                  rootEntriesYielded += 1;
+                  yield {
+                    name: 'dense-' + index,
+                    isSymbolicLink: () => false,
+                    isDirectory: () => true,
+                    isFile: () => false,
+                  };
+                }
+              },
+              close: async () => undefined,
+            };
+          }
+          if (isVirtualChild(directoryPath)) {
+            firstChildOpenedAfterEntries ??= rootEntriesYielded;
+            signalFirstChildOpened();
+            return {
+              async *[Symbol.asyncIterator]() {},
+              close: async () => undefined,
+            };
+          }
+          throw new Error('Unexpected directory iterator request.');
+        },
+      });
+
+      const scan = scanner.scanDirectories([directory]);
+      await firstChildOpened;
+      expect(firstChildOpenedAfterEntries).toBe(1);
+      expect(scanner.cancelScan().cancelled).toBe(true);
+
+      await expect(scan).resolves.toEqual({
+        status: 'cancelled',
+        count: 0,
+        truncated: false,
+      });
+      expect(rootEntriesYielded).toBe(1);
+      expect(scanner.getStatus()).toMatchObject({ status: 'cancelled', scannedDirectories: 1 });
+    } finally {
+      lstatSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
+  });
+});
+
 test('scanner indexes models beyond the former depth cap', async () => {
   await withTemporaryLibrary(async (directory) => {
     let nestedDirectory = directory;
@@ -192,6 +313,79 @@ test('scanner indexes models beyond the former depth cap', async () => {
     });
     expect(scanner.listModels().map((model) => model.name)).toEqual(['deep-model.glb']);
     expect(scanner.getStatus()).toMatchObject({ scannedDirectories: 15, truncated: false });
+  });
+});
+
+test('scanner processes selected roots and nested entries in deterministic DFS order', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const firstRoot = path.join(directory, 'first');
+    const secondRoot = path.join(directory, 'second');
+    const nestedDirectory = path.join(firstRoot, 'nested');
+    const deepModel = path.join(nestedDirectory, 'deep.glb');
+    const siblingModel = path.join(firstRoot, 'sibling.glb');
+    const secondRootModel = path.join(secondRoot, 'second.glb');
+    await Promise.all([
+      fs.promises.mkdir(nestedDirectory, { recursive: true }),
+      fs.promises.mkdir(secondRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeValidModel(deepModel),
+      writeValidModel(siblingModel),
+      writeValidModel(secondRootModel),
+    ]);
+
+    const [canonicalFirstRoot, canonicalNestedDirectory, canonicalSecondRoot] = await Promise.all([
+      fs.promises.realpath(firstRoot),
+      fs.promises.realpath(nestedDirectory),
+      fs.promises.realpath(secondRoot),
+    ]);
+    const directoryEntry = (name) => ({
+      name,
+      isSymbolicLink: () => false,
+      isDirectory: () => true,
+      isFile: () => false,
+    });
+    const fileEntry = (name) => ({
+      name,
+      isSymbolicLink: () => false,
+      isDirectory: () => false,
+      isFile: () => true,
+    });
+    const entriesByDirectory = new Map([
+      [canonicalFirstRoot, [directoryEntry('nested'), fileEntry('sibling.glb')]],
+      [canonicalNestedDirectory, [fileEntry('deep.glb')]],
+      [canonicalSecondRoot, [fileEntry('second.glb')]],
+    ]);
+    const validationOrder = [];
+    const originalOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (candidatePath, ...args) => {
+      validationOrder.push(path.basename(candidatePath));
+      return originalOpen(candidatePath, ...args);
+    });
+
+    try {
+      const scanner = new FileScanner({
+        openDirectory: async (directoryPath) => {
+          const entries = entriesByDirectory.get(directoryPath);
+          if (!entries) throw new Error('Unexpected directory iterator request.');
+          return {
+            async *[Symbol.asyncIterator]() {
+              for (const entry of entries) yield entry;
+            },
+            close: async () => undefined,
+          };
+        },
+      });
+
+      await expect(scanner.scanDirectories([firstRoot, secondRoot])).resolves.toEqual({
+        status: 'completed',
+        count: 3,
+        truncated: false,
+      });
+      expect(validationOrder).toEqual(['deep.glb', 'sibling.glb', 'second.glb']);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });
 
@@ -242,6 +436,8 @@ test('scanner indexes more directories and models than the former global caps', 
   const directoryPrefix = `${directoriesRoot}${path.sep}`;
   const modelCount = 10_001;
   const directoryCount = 10_001;
+  let directoryEntriesYielded = 0;
+  let firstChildDirectoryOpenedAfterEntries = null;
   const directoryStats = {
     isDirectory: () => true,
     isFile: () => false,
@@ -250,7 +446,7 @@ test('scanner indexes more directories and models than the former global caps', 
   const fileStats = {
     dev: 1,
     ino: 1,
-    size: 12,
+    size: minimalGlb().length,
     mtime: new Date('2026-01-01T00:00:00.000Z'),
     mtimeMs: 1,
     isDirectory: () => false,
@@ -295,8 +491,12 @@ test('scanner indexes more directories and models than the former global caps', 
         async *[Symbol.asyncIterator]() {
           if (directoryPath === directoriesRoot) {
             for (let index = 0; index < directoryCount; index += 1) {
+              directoryEntriesYielded += 1;
               yield virtualDirectoryEntry(index);
             }
+          }
+          if (directoryPath.startsWith(directoryPrefix)) {
+            firstChildDirectoryOpenedAfterEntries ??= directoryEntriesYielded;
           }
           if (directoryPath === modelsRoot) {
             for (let index = 0; index < modelCount; index += 1) {
@@ -318,6 +518,7 @@ test('scanner indexes more directories and models than the former global caps', 
       foundModels: modelCount,
       truncated: false,
     });
+    expect(firstChildDirectoryOpenedAfterEntries).toBe(1);
   } finally {
     realpathSpy.mockRestore();
     statSpy.mockRestore();
@@ -646,5 +847,182 @@ test('a registered model cannot be served after its path resolves outside its ap
     } finally {
       await fs.promises.rm(outsideDirectory, { recursive: true, force: true });
     }
+  });
+});
+
+test('catalog pages are bounded, cursor-authenticated, and never expose filesystem paths', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    await Promise.all([
+      writeValidModel(path.join(directory, 'alpha.glb')),
+      writeValidModel(path.join(directory, 'bravo.glb')),
+      writeValidModel(path.join(directory, 'charlie.glb')),
+    ]);
+    const scanner = new FileScanner();
+    await scanner.scanDirectories([directory]);
+
+    const firstPage = scanner.getCatalogPage({ limit: 2, filters: { sortBy: 'name' } });
+    expect(firstPage).toMatchObject({
+      reset: false,
+      total: 3,
+      isScanning: false,
+    });
+    expect(firstPage.items.map((item) => item.name)).toEqual(['alpha.glb', 'bravo.glb']);
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(JSON.stringify(firstPage)).not.toContain(directory);
+    expect(firstPage.nextCursor).not.toContain(directory);
+
+    const secondPage = scanner.getCatalogPage({
+      revision: firstPage.catalogRevision,
+      cursor: firstPage.nextCursor,
+      limit: 2,
+      filters: { sortBy: 'name' },
+    });
+    expect(secondPage).toMatchObject({ reset: false, total: 3, nextCursor: null });
+    expect(secondPage.items.map((item) => item.name)).toEqual(['charlie.glb']);
+
+    expect(scanner.getCatalogNeighbor({
+      relation: 'next',
+      id: firstPage.items[0].id,
+      revision: firstPage.catalogRevision,
+      filters: { sortBy: 'name' },
+    })).toMatchObject({ reset: false, model: { name: 'bravo.glb' } });
+    expect(scanner.getCatalogNeighbor({
+      relation: 'previous',
+      id: firstPage.items[0].id,
+      revision: firstPage.catalogRevision,
+      filters: { sortBy: 'name' },
+    })).toMatchObject({ reset: false, model: { name: 'charlie.glb' } });
+    expect(scanner.getCatalogNeighbor({
+      relation: 'next',
+      id: 'f'.repeat(48),
+      revision: firstPage.catalogRevision,
+      filters: { query: 'alpha', sortBy: 'name' },
+    })).toMatchObject({ reset: false, model: { name: 'alpha.glb' } });
+    const randomNeighbor = scanner.getCatalogNeighbor({
+      relation: 'random',
+      id: firstPage.items[0].id,
+      revision: firstPage.catalogRevision,
+      filters: { sortBy: 'name' },
+    });
+    expect(randomNeighbor.model).not.toBeNull();
+    expect(randomNeighbor.model.id).not.toBe(firstPage.items[0].id);
+
+    expect(() => scanner.getCatalogPage({ limit: 101 })).toThrow('Invalid catalog page limit');
+    expect(() => scanner.getCatalogPage({
+      cursor: firstPage.nextCursor,
+      filters: { query: 'other' },
+    })).toThrow('Invalid catalog cursor');
+  });
+});
+
+test('a catalog revision resets stale pages even when a replacement keeps the same count', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const modelPath = path.join(directory, 'replaceable.glb');
+    await writeValidModel(modelPath);
+    const scanner = new FileScanner();
+    await scanner.scanDirectories([directory]);
+    const before = scanner.getCatalogPage({ limit: 1 });
+    const originalId = before.items[0].id;
+
+    await writeValidModel(modelPath, minimalGlb(20));
+    await scanner.scanDirectories([directory]);
+
+    const after = scanner.getCatalogPage({ limit: 1 });
+    expect(after.total).toBe(1);
+    expect(after.catalogRevision).toBeGreaterThan(before.catalogRevision);
+    expect(after.items[0].id).not.toBe(originalId);
+    expect(scanner.getCatalogPage({
+      revision: before.catalogRevision,
+      cursor: before.nextCursor,
+      limit: 1,
+    })).toMatchObject({
+      reset: true,
+      items: [],
+      nextCursor: null,
+      catalogRevision: after.catalogRevision,
+    });
+  });
+});
+
+test('lazy tree children retain distinct root identities for equal relative folders', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const firstRoot = path.join(directory, 'first-root');
+    const secondRoot = path.join(directory, 'second-root');
+    await Promise.all([
+      fs.promises.mkdir(path.join(firstRoot, 'assets'), { recursive: true }),
+      fs.promises.mkdir(path.join(secondRoot, 'assets'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeValidModel(path.join(firstRoot, 'assets', 'first.glb')),
+      writeValidModel(path.join(secondRoot, 'assets', 'second.glb')),
+    ]);
+    const scanner = new FileScanner();
+    await scanner.scanDirectories([firstRoot, secondRoot]);
+
+    const roots = scanner.getTreeChildren({ limit: 10 });
+    expect(roots.items).toHaveLength(2);
+    expect(roots.items.every((item) => item.type === 'folder')).toBe(true);
+    expect(new Set(roots.items.map((item) => item.id)).size).toBe(2);
+    expect(JSON.stringify(roots)).not.toContain(directory);
+
+    const firstAssets = scanner.getTreeChildren({ parentId: roots.items[0].id, limit: 10 });
+    const secondAssets = scanner.getTreeChildren({ parentId: roots.items[1].id, limit: 10 });
+    expect(firstAssets.items).toHaveLength(1);
+    expect(secondAssets.items).toHaveLength(1);
+    expect(firstAssets.items[0]).toMatchObject({ type: 'folder', name: 'assets' });
+    expect(secondAssets.items[0]).toMatchObject({ type: 'folder', name: 'assets' });
+    expect(firstAssets.items[0].id).not.toBe(secondAssets.items[0].id);
+
+    const leaf = scanner.getTreeChildren({ parentId: firstAssets.items[0].id, limit: 10 });
+    expect(leaf.items).toMatchObject([{ type: 'model', name: 'first.glb' }]);
+    expect(JSON.stringify(leaf)).not.toContain(directory);
+  });
+});
+
+test('cancellation creates a fresh revision while retaining safely published records', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const previousDirectory = path.join(directory, 'previous');
+    const nextDirectory = path.join(directory, 'next');
+    await Promise.all([fs.promises.mkdir(previousDirectory), fs.promises.mkdir(nextDirectory)]);
+    const previousPath = path.join(previousDirectory, 'previous.glb');
+    const stagedPath = path.join(nextDirectory, 'staged.glb');
+    await Promise.all([writeValidModel(previousPath), writeValidModel(stagedPath)]);
+
+    let releaseEnumeration;
+    let signalEnumerationPaused;
+    const enumerationGate = new Promise((resolve) => { releaseEnumeration = resolve; });
+    const enumerationPaused = new Promise((resolve) => { signalEnumerationPaused = resolve; });
+    const scanner = new FileScanner({
+      openDirectory: async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            name: 'staged.glb',
+            isSymbolicLink: () => false,
+            isDirectory: () => false,
+            isFile: () => true,
+          };
+          signalEnumerationPaused();
+          await enumerationGate;
+        },
+        close: async () => undefined,
+      }),
+    });
+    await scanner.registerDroppedPath(previousPath);
+    const scan = scanner.scanDirectories([nextDirectory]);
+    await enumerationPaused;
+    const revisionBeforeCancellation = scanner.getStatus().catalogRevision;
+
+    expect(scanner.cancelScan().cancelled).toBe(true);
+    releaseEnumeration();
+    await expect(scan).resolves.toMatchObject({ status: 'cancelled' });
+    const statusAfterCancellation = scanner.getStatus();
+    expect(statusAfterCancellation.catalogRevision).toBeGreaterThan(revisionBeforeCancellation);
+    expect(scanner.listModels().map((model) => model.name)).toEqual(['previous.glb', 'staged.glb']);
+    expect(scanner.getCatalogPage({ revision: revisionBeforeCancellation })).toMatchObject({
+      reset: true,
+      items: [],
+      nextCursor: null,
+    });
   });
 });

@@ -46,6 +46,15 @@ function responseFrom(value, contentType = 'application/octet-stream') {
   return new Response(value, { status: 200, headers: { 'content-type': contentType } });
 }
 
+function pathNameForRequest(value) {
+  const url = value instanceof Request ? value.url : String(value);
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
 function createBinaryColorStl() {
   const buffer = new ArrayBuffer(84 + 50);
   const bytes = new Uint8Array(buffer);
@@ -89,6 +98,75 @@ function createTriangleGltf() {
   });
 }
 
+function createStalledTextureGltf() {
+  const gltf = JSON.parse(createTriangleGltf());
+  gltf.images = [{ uri: 'stalled.png' }];
+  gltf.textures = [{ source: 0 }];
+  gltf.materials = [{
+    name: 'Stalled texture material',
+    pbrMetallicRoughness: { baseColorTexture: { index: 0 } }
+  }];
+  gltf.meshes[0].primitives[0].material = 0;
+  return JSON.stringify(gltf);
+}
+
+function createExternalTriangleGltf() {
+  return JSON.stringify({
+    asset: { version: '2.0', generator: 'NexoIP external-buffer test fixture' },
+    buffers: [{ byteLength: 42, uri: 'triangle.bin' }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36, target: 34962 },
+      { buffer: 0, byteOffset: 36, byteLength: 6, target: 34963 }
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+      { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR', min: [0], max: [2] }
+    ],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    nodes: [{ mesh: 0, name: 'External Triangle' }],
+    scenes: [{ nodes: [0] }],
+    scene: 0
+  });
+}
+
+function createExternalTriangleBinary() {
+  const positions = Buffer.alloc(36);
+  [[0, 0, 0], [1, 0, 0], [0, 1, 0]].forEach((vertex, index) => {
+    vertex.forEach((value, component) => positions.writeFloatLE(value, index * 12 + component * 4));
+  });
+  const indices = Buffer.alloc(6);
+  [0, 1, 2].forEach((value, index) => indices.writeUInt16LE(value, index * 2));
+  return Buffer.concat([positions, indices]);
+}
+
+function createLongHeaderPly(commentBytes = 96 * 1024) {
+  return `ply\nformat ascii 1.0\ncomment ${'x'.repeat(commentBytes)}\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n`;
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function settlesWithin(promise, timeoutMs = 150) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(null), timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 describe('real model loader paths and resource budgets', () => {
   beforeEach(() => {
     if (!globalThis.ProgressEvent) {
@@ -101,25 +179,29 @@ describe('real model loader paths and resource budgets', () => {
     }
     globalThis.FileReader = TestFileReader;
     globalThis.fetch = vi.fn(async (url) => {
-      const value = url instanceof Request ? url.url : String(url);
-      if (value.endsWith('/colored.stl')) return responseFrom(createBinaryColorStl());
-      if (value.endsWith('/points.ply')) {
+      const pathName = pathNameForRequest(url);
+      if (pathName.endsWith('/colored.stl')) return responseFrom(createBinaryColorStl());
+      if (pathName.endsWith('/points.ply')) {
         return responseFrom(`ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n0 0 0 255 0 0\n1 1 1 0 255 0\n`, 'text/plain');
       }
-      if (value.endsWith('/mesh.ply')) {
+      if (pathName.endsWith('/mesh.ply')) {
         return responseFrom(`ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 1 0 0\n1 0 0 1 0 0\n0 1 0 1 0 0\n3 0 1 2\n`, 'text/plain');
       }
-      if (value.endsWith('/triangle.gltf')) return responseFrom(createTriangleGltf(), 'model/gltf+json');
-      if (value.endsWith('/material.obj')) {
+      if (pathName.endsWith('/long-header.ply')) return responseFrom(createLongHeaderPly(), 'text/plain');
+      if (pathName.endsWith('/triangle.gltf')) return responseFrom(createTriangleGltf(), 'model/gltf+json');
+      if (pathName.endsWith('/external-triangle.gltf')) return responseFrom(createExternalTriangleGltf(), 'model/gltf+json');
+      if (pathName.endsWith('/triangle.bin')) return responseFrom(createExternalTriangleBinary());
+      if (pathName.endsWith('/material.obj')) {
         return responseFrom('mtllib material.mtl\no Triangle\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Amber\nf 1 2 3\n', 'text/plain');
       }
-      if (value.endsWith('/material.mtl')) return responseFrom('newmtl Amber\nKd 1.0 0.5 0.0\n', 'text/plain');
-      if (value.endsWith('/multi.obj')) {
+      if (pathName.endsWith('/material.mtl')) return responseFrom('newmtl Amber\nKd 1.0 0.5 0.0\n', 'text/plain');
+      if (pathName.endsWith('/multi.obj')) {
         return responseFrom('mtllib first.mtl\nmtllib second.mtl\no Multi\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nusemtl First\nf 1 2 3\nusemtl Second\nf 2 4 3\n', 'text/plain');
       }
-      if (value.endsWith('/first.mtl')) return responseFrom('newmtl First\nKd 1 0 0\n', 'text/plain');
-      if (value.endsWith('/second.mtl')) return responseFrom('newmtl Second\nKd 0 1 0\n', 'text/plain');
-      if (value.startsWith('data:')) return originalFetch(url);
+      if (pathName.endsWith('/first.mtl')) return responseFrom('newmtl First\nKd 1 0 0\n', 'text/plain');
+      if (pathName.endsWith('/second.mtl')) return responseFrom('newmtl Second\nKd 0 1 0\n', 'text/plain');
+      const requestUrl = url instanceof Request ? url.url : String(url);
+      if (requestUrl.startsWith('data:')) return originalFetch(url);
       return new Response('not found', { status: 404 });
     });
   });
@@ -157,6 +239,14 @@ describe('real model loader paths and resource budgets', () => {
     disposeModelResources(mesh.object);
   });
 
+  it('accepts a structurally valid PLY header beyond 64 KiB within the source budget', async () => {
+    const result = await load3DModel('nexoip://app/model/id/long-header.ply', 'long-header.ply');
+
+    expect(result.object.isMesh).toBe(true);
+    expect(result.stats).toMatchObject({ meshes: 1, vertices: 3, triangles: 1 });
+    disposeModelResources(result.object);
+  });
+
   it('loads a real glTF scene with a local embedded buffer', async () => {
     const result = await load3DModel('nexoip://app/model/id/triangle.gltf', 'triangle.gltf');
     expect(result.stats.meshes).toBe(1);
@@ -183,6 +273,207 @@ describe('real model loader paths and resource budgets', () => {
     expect(material?.color.r).toBeCloseTo(1);
     expect(material?.color.getHexString()).toBe('ff8000');
     disposeModelResources(result.object);
+  });
+
+  it('stops a streamed source as soon as its aggregate source-byte budget is exceeded', async () => {
+    const bytes = new Uint8Array(createBinaryColorStl());
+    const chunks = [bytes.slice(0, 80), bytes.slice(80, 120), bytes.slice(120)];
+    let pulls = 0;
+    let cancelled = false;
+    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream({
+      pull(controller) {
+        if (pulls >= chunks.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunks[pulls]);
+        pulls += 1;
+      },
+      cancel() {
+        cancelled = true;
+      }
+    }), { status: 200 }));
+
+    await expect(load3DModel('nexoip://app/model/id/streamed.stl', 'streamed.stl', undefined, {
+      budget: { ...DEFAULT_MODEL_BUDGET, maxSourceBytes: 100 }
+    })).rejects.toMatchObject({
+      name: 'ModelBudgetError',
+      code: 'MODEL_BUDGET_SOURCEBYTES',
+      actual: 120,
+      limit: 100
+    });
+    expect(pulls).toBeGreaterThanOrEqual(2);
+    expect(cancelled).toBe(true);
+  });
+
+  it('rejects an OBJ sidecar before issuing it once its request budget is exhausted', async () => {
+    const fetchMock = globalThis.fetch;
+
+    await expect(load3DModel('nexoip://app/model/id/material.obj', 'material.obj', undefined, {
+      budget: { ...DEFAULT_MODEL_BUDGET, maxRequests: 1 }
+    })).rejects.toMatchObject({
+      name: 'ModelBudgetError',
+      code: 'MODEL_BUDGET_REQUESTS',
+      actual: 2,
+      limit: 1
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts Three-managed glTF buffers before fetching a sidecar beyond the request budget', async () => {
+    const fetchMock = globalThis.fetch;
+
+    await expect(load3DModel('nexoip://app/model/id/external-triangle.gltf', 'external-triangle.gltf', undefined, {
+      budget: { ...DEFAULT_MODEL_BUDGET, maxRequests: 1 }
+    })).rejects.toMatchObject({
+      name: 'ModelBudgetError',
+      code: 'MODEL_BUDGET_REQUESTS',
+      actual: 2,
+      limit: 1
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('charges a Three-managed glTF buffer against the aggregate source-byte budget while it is read', async () => {
+    const manifestBytes = new TextEncoder().encode(createExternalTriangleGltf()).byteLength;
+    const binaryBytes = createExternalTriangleBinary().byteLength;
+    const limit = manifestBytes + binaryBytes - 1;
+
+    await expect(load3DModel('nexoip://app/model/id/external-triangle.gltf', 'external-triangle.gltf', undefined, {
+      budget: { ...DEFAULT_MODEL_BUDGET, maxSourceBytes: limit }
+    })).rejects.toMatchObject({
+      name: 'ModelBudgetError',
+      code: 'MODEL_BUDGET_SOURCEBYTES',
+      actual: manifestBytes + binaryBytes,
+      limit
+    });
+  });
+
+  it('cancels a stalled Three glTF sidecar promptly and releases its scoped fetch bridge', async () => {
+    const controller = new AbortController();
+    const stalledBinary = deferred();
+    const binaryStarted = deferred();
+    const abortObserved = deferred();
+    const lateBodyCancelled = deferred();
+    const fetchMock = vi.fn((url, init = {}) => {
+      const pathName = pathNameForRequest(url);
+      if (pathName.endsWith('/external-triangle.gltf')) {
+        return Promise.resolve(responseFrom(createExternalTriangleGltf(), 'model/gltf+json'));
+      }
+      if (pathName.endsWith('/triangle.bin')) {
+        init.signal?.addEventListener('abort', () => abortObserved.resolve(), { once: true });
+        binaryStarted.resolve();
+        return stalledBinary.promise;
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    globalThis.fetch = fetchMock;
+
+    const task = load3DModel('nexoip://app/model/id/external-triangle.gltf', 'external-triangle.gltf', undefined, {
+      signal: controller.signal
+    });
+    await binaryStarted.promise;
+    expect(globalThis.fetch).not.toBe(fetchMock);
+
+    controller.abort();
+    await abortObserved.promise;
+    const failure = await settlesWithin(task.then(() => null, (error) => error));
+    expect(failure).toMatchObject({ message: 'La carga del modelo se canceló.' });
+    expect(failure?.cause).toMatchObject({ name: 'AbortError' });
+    expect(globalThis.fetch).toBe(fetchMock);
+
+    stalledBinary.resolve(new Response(new ReadableStream({
+      cancel() {
+        lateBodyCancelled.resolve();
+      }
+    }), { status: 200 }));
+    await lateBodyCancelled.promise;
+    expect(globalThis.fetch).toBe(fetchMock);
+  });
+
+  it('cancels a stalled image-element texture fallback and releases its object URL', async () => {
+    const controller = new AbortController();
+    const imageStarted = deferred();
+    const unhandledRejection = vi.fn();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const hadCreateImageBitmap = Object.hasOwn(globalThis, 'createImageBitmap');
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    const hadDocument = Object.hasOwn(globalThis, 'document');
+    const originalDocument = globalThis.document;
+    const hadSelf = Object.hasOwn(globalThis, 'self');
+    const originalSelf = globalThis.self;
+    let assignedSource = null;
+    let lateLoad = null;
+    const image = {};
+    Object.defineProperty(image, 'src', {
+      configurable: true,
+      get() {
+        return assignedSource;
+      },
+      set(value) {
+        assignedSource = value;
+        if (value) {
+          lateLoad = image.onload;
+          imageStarted.resolve();
+        }
+      }
+    });
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:nexoip-stalled-texture');
+    const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const handleUnhandledRejection = (reason) => unhandledRejection(reason);
+
+    globalThis.createImageBitmap = undefined;
+    globalThis.self = globalThis;
+    globalThis.document = {
+      createElement(tagName) {
+        if (tagName !== 'img') throw new Error(`Elemento inesperado: ${tagName}`);
+        return image;
+      }
+    };
+    globalThis.fetch = vi.fn((url) => {
+      const pathName = pathNameForRequest(url);
+      if (pathName.endsWith('/stalled-texture.gltf')) {
+        return Promise.resolve(responseFrom(createStalledTextureGltf(), 'model/gltf+json'));
+      }
+      if (pathName.endsWith('/stalled.png')) {
+        return Promise.resolve(responseFrom(new Uint8Array([137, 80, 78, 71]), 'image/png'));
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    process.on('unhandledRejection', handleUnhandledRejection);
+
+    try {
+      const task = load3DModel('nexoip://app/model/id/stalled-texture.gltf', 'stalled-texture.gltf', undefined, {
+        signal: controller.signal
+      });
+      await imageStarted.promise;
+      const objectUrl = assignedSource;
+      expect(createObjectUrl).toHaveBeenCalledTimes(1);
+      expect(objectUrl).toBe('blob:nexoip-stalled-texture');
+
+      controller.abort();
+      const failure = await settlesWithin(task.then(() => null, (error) => error));
+      expect(failure).toMatchObject({ message: 'La carga del modelo se canceló.' });
+      expect(failure?.cause).toMatchObject({ name: 'AbortError' });
+      expect(image.onload).toBeNull();
+      expect(image.onerror).toBeNull();
+      expect(assignedSource).toBe('');
+      expect(revokeObjectUrl).toHaveBeenCalledWith(objectUrl);
+
+      const revocationsAfterAbort = revokeObjectUrl.mock.calls.length;
+      lateLoad?.call(image);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(revocationsAfterAbort);
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', handleUnhandledRejection);
+      if (hadCreateImageBitmap) globalThis.createImageBitmap = originalCreateImageBitmap;
+      else delete globalThis.createImageBitmap;
+      if (hadDocument) globalThis.document = originalDocument;
+      else delete globalThis.document;
+      if (hadSelf) globalThis.self = originalSelf;
+      else delete globalThis.self;
+    }
   });
 
   it('merges every declared OBJ material library', async () => {

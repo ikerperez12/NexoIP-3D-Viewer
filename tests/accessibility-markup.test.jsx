@@ -5,6 +5,7 @@ import AnimationController from '../src/components/AnimationController.jsx';
 import DropZone from '../src/components/DropZone.jsx';
 import FileLibrarySidebar from '../src/components/FileLibrarySidebar.jsx';
 import ModelInspector from '../src/components/ModelInspector.jsx';
+import Toolbar3D from '../src/components/Toolbar3D.jsx';
 
 describe('server-rendered accessibility contracts', () => {
   it('renders related library tabs, live progress, and a cancellable scan', () => {
@@ -55,6 +56,54 @@ describe('server-rendered accessibility contracts', () => {
     expect(treePanel).toMatch(/aria-controls="library-[^"]+-panel-tree"/);
     expect(treePanel).toMatch(/aria-describedby="tree-page-/);
     expect(treePanel).toContain('Mostrando 100 de 250 elementos en Biblioteca local.');
+  });
+
+  it('keeps v2 list and tree pagination bounded, labelled, and connected to their result panels', () => {
+    const files = Array.from({ length: 100 }, (_, index) => ({
+      id: `remote-${index}`,
+      name: `remote-entry-${index}.glb`,
+      extension: 'glb'
+    }));
+    const markup = renderToStaticMarkup(
+      <FileLibrarySidebar
+        isOpen
+        catalogV2
+        catalogState={{
+          catalogRevision: 8,
+          total: 250,
+          nextCursor: 'catalog-next',
+          filters: { query: '', extension: 'all' },
+          isLoading: false,
+          isLoadingMore: false,
+        }}
+        files={files}
+        treePages={{
+          '__catalog-root__': {
+            items: files.map((file) => ({ ...file, type: 'model' })),
+            total: 250,
+            nextCursor: 'tree-next',
+            isLoading: false,
+          }
+        }}
+        onLoadMoreCatalog={() => undefined}
+        onLoadTreeChildren={() => undefined}
+        onStartScan={() => undefined}
+        bridgeAvailable
+      />
+    );
+
+    expect(markup).toContain('remote-entry-99.glb');
+    expect(markup).toContain('Mostrar más elementos (150 restantes)');
+    expect(markup).toContain('Mostrar más modelos (150 restantes)');
+    expect(markup).toMatch(/aria-controls="library-[^"]+-panel-tree"/);
+    expect(markup).toMatch(/aria-controls="library-[^"]+-panel-flat"/);
+    expect(markup).toContain('Mostrando 100 de 250 modelos.');
+  });
+
+  it('does not invent a paginated catalog position that the bridge cannot prove', () => {
+    const markup = renderToStaticMarkup(<Toolbar3D currentIndex={-1} currentIndexKnown={false} totalCount={250} />);
+    expect(markup).toContain('—/250');
+    expect(markup).toContain('Navegación de modelos, posición no cargada de 250');
   });
 
   it('keeps the hidden file input out of the tab order and labels its single trigger', () => {

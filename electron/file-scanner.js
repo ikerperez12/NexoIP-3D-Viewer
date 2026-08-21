@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import {
+  randomBytes,
+  createHash,
+  createHmac,
+  timingSafeEqual,
+  randomInt,
+} from 'node:crypto';
 import {
   isOpaqueId,
   isPathInside,
@@ -20,9 +26,20 @@ const SCAN_YIELD_INTERVAL = 128;
 const MAX_STRUCTURAL_VALIDATION_BYTES = 256 * 1024;
 const GLB_MAGIC = 0x46546C67;
 const GLB_VERSION = 2;
+const GLB_JSON_CHUNK_TYPE = 0x4E4F534A;
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
 const FBX_BINARY_HEADER = Buffer.from('Kaydara FBX Binary  \0\x1A\0', 'binary');
+const CATALOG_ROOT_ID = 'library';
+const CATALOG_ROOT_ID_PREFIX = 'root-';
+const CATALOG_FOLDER_ID_PREFIX = 'folder-';
+const CATALOG_CURSOR_VERSION = 1;
+const CATALOG_CURSOR_MAX_LENGTH = 512;
+const DEFAULT_CATALOG_PAGE_LIMIT = 50;
+const MAX_CATALOG_PAGE_LIMIT = 100;
+const CATALOG_PAGE_REQUEST_KEYS = new Set(['filters', 'revision', 'cursor', 'limit']);
+const TREE_CHILDREN_REQUEST_KEYS = new Set(['parentId', 'revision', 'cursor', 'limit']);
+const CATALOG_NEIGHBOR_REQUEST_KEYS = new Set(['relation', 'id', 'filters', 'revision']);
 
 function toFileIdentity(stats) {
   return {
@@ -63,34 +80,193 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeCatalogRevision(value) {
+  if (value === undefined || value === null) return null;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError('Invalid catalog revision.');
+  }
+  return value;
+}
+
+function normalizeCatalogPageLimit(value) {
+  if (value === undefined || value === null) return DEFAULT_CATALOG_PAGE_LIMIT;
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CATALOG_PAGE_LIMIT) {
+    throw new TypeError('Invalid catalog page limit.');
+  }
+  return value;
+}
+
+function normalizeCatalogCursor(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.length === 0 || value.length > CATALOG_CURSOR_MAX_LENGTH) {
+    throw new TypeError('Invalid catalog cursor.');
+  }
+  return value;
+}
+
+function assertOnlyKnownRequestKeys(input, knownKeys, message) {
+  if (Object.keys(input).some((key) => !knownKeys.has(key))) {
+    throw new TypeError(message);
+  }
+}
+
+function normalizeCatalogPageRequest(input) {
+  if (input === undefined || input === null) {
+    return {
+      filters: normalizeFilters(),
+      revision: null,
+      cursor: null,
+      limit: DEFAULT_CATALOG_PAGE_LIMIT,
+    };
+  }
+  if (!isPlainObject(input)) {
+    throw new TypeError('Invalid catalog page request.');
+  }
+  assertOnlyKnownRequestKeys(input, CATALOG_PAGE_REQUEST_KEYS, 'Invalid catalog page request.');
+  return {
+    filters: normalizeFilters(input.filters),
+    revision: normalizeCatalogRevision(input.revision),
+    cursor: normalizeCatalogCursor(input.cursor),
+    limit: normalizeCatalogPageLimit(input.limit),
+  };
+}
+
+function isCatalogTreeNodeId(value) {
+  return value === CATALOG_ROOT_ID
+    || (typeof value === 'string'
+      && (/^root-[a-f0-9]{48}$/.test(value) || /^folder-[a-f0-9]{48}$/.test(value)));
+}
+
+function normalizeTreeChildrenRequest(input) {
+  if (input === undefined || input === null) {
+    return {
+      parentId: CATALOG_ROOT_ID,
+      revision: null,
+      cursor: null,
+      limit: DEFAULT_CATALOG_PAGE_LIMIT,
+    };
+  }
+  if (!isPlainObject(input)) {
+    throw new TypeError('Invalid tree request.');
+  }
+  assertOnlyKnownRequestKeys(input, TREE_CHILDREN_REQUEST_KEYS, 'Invalid tree request.');
+  const parentId = input.parentId === undefined ? CATALOG_ROOT_ID : input.parentId;
+  if (!isCatalogTreeNodeId(parentId)) {
+    throw new TypeError('Invalid tree node identifier.');
+  }
+  return {
+    parentId,
+    revision: normalizeCatalogRevision(input.revision),
+    cursor: normalizeCatalogCursor(input.cursor),
+    limit: normalizeCatalogPageLimit(input.limit),
+  };
+}
+
+function normalizeCatalogNeighborRequest(input) {
+  if (!isPlainObject(input)) {
+    throw new TypeError('Invalid catalog navigation request.');
+  }
+  assertOnlyKnownRequestKeys(input, CATALOG_NEIGHBOR_REQUEST_KEYS, 'Invalid catalog navigation request.');
+  const relation = input.relation;
+  if (!['previous', 'next', 'random'].includes(relation)) {
+    throw new TypeError('Invalid catalog navigation relation.');
+  }
+  const id = input.id;
+  if (relation !== 'random' && !isOpaqueId(id)) {
+    throw new TypeError('Invalid model identifier.');
+  }
+  if (id !== undefined && id !== null && !isOpaqueId(id)) {
+    throw new TypeError('Invalid model identifier.');
+  }
+  return {
+    relation,
+    id: id || null,
+    filters: normalizeFilters(input.filters),
+    revision: normalizeCatalogRevision(input.revision),
+  };
+}
+
+function catalogFilterKey(filters) {
+  return JSON.stringify([
+    filters.query,
+    filters.extension,
+    filters.sortBy,
+    filters.order,
+  ]);
+}
+
+function hasSupportedGltfAsset(document) {
+  return isPlainObject(document)
+    && isPlainObject(document.asset)
+    && typeof document.asset.version === 'string'
+    && /^2(?:\.\d+)?$/.test(document.asset.version);
+}
+
+function isStructurallyValidGltfJson(bytes) {
+  const text = toText(bytes);
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') || trimmed.includes('\0')) return false;
+
+  try {
+    return hasSupportedGltfAsset(JSON.parse(trimmed));
+  } catch {
+    return false;
+  }
+}
+
 function isStructurallyValidGlb(bytes, size) {
-  if (bytes.length < 12) return false;
+  // A header alone is not an asset. GLB 2.0 requires a first JSON chunk whose
+  // declared, four-byte-aligned extent fits the file. Complete bounded JSON
+  // chunks are checked as glTF 2.0 metadata; larger chunks retain the same
+  // prefix-only policy used for oversized .gltf files below.
+  if (bytes.length < 20 || size < 20) return false;
   const magic = bytes.readUInt32LE(0);
   const version = bytes.readUInt32LE(4);
   const declaredLength = bytes.readUInt32LE(8);
-  return magic === GLB_MAGIC && version === GLB_VERSION && declaredLength === size;
+  if (magic !== GLB_MAGIC || version !== GLB_VERSION || declaredLength !== size) return false;
+
+  const jsonChunkLength = bytes.readUInt32LE(12);
+  const jsonChunkType = bytes.readUInt32LE(16);
+  const jsonChunkEnd = 20 + jsonChunkLength;
+  if (jsonChunkType !== GLB_JSON_CHUNK_TYPE
+    || jsonChunkLength === 0
+    || jsonChunkLength % 4 !== 0
+    || jsonChunkEnd > size) {
+    return false;
+  }
+
+  if (jsonChunkEnd <= bytes.length) {
+    if (!isStructurallyValidGltfJson(bytes.subarray(20, jsonChunkEnd))) return false;
+  } else {
+    const jsonPrefix = toText(bytes.subarray(20));
+    const trimmedPrefix = jsonPrefix.trimStart();
+    if (!trimmedPrefix.startsWith('{') || trimmedPrefix.includes('\0')) return false;
+  }
+
+  // When the whole compact GLB was read, ensure every declared chunk fits the
+  // container. A large GLB remains bounded to the first validation window.
+  if (bytes.length < size) return true;
+  let chunkOffset = jsonChunkEnd;
+  while (chunkOffset < size) {
+    if (chunkOffset + 8 > size) return false;
+    const chunkLength = bytes.readUInt32LE(chunkOffset);
+    if (chunkLength % 4 !== 0 || chunkOffset + 8 + chunkLength > size) return false;
+    chunkOffset += 8 + chunkLength;
+  }
+  return chunkOffset === size;
 }
 
 function isStructurallyValidGltf(bytes, size) {
-  const text = toText(bytes);
-  const trimmed = text.trimStart();
-  if (!trimmed.startsWith('{') || trimmed.includes('\0')) return false;
-
   // JSON metadata can legitimately be large because data URIs may be embedded.
   // Keep the scan bounded: reject malformed files when their complete JSON is
   // available, and retain a plausibly JSON-shaped larger candidate for loader
   // validation rather than falsely excluding a valid model.
-  if (size > bytes.length) return true;
-
-  try {
-    const document = JSON.parse(trimmed);
-    return isPlainObject(document)
-      && isPlainObject(document.asset)
-      && typeof document.asset.version === 'string'
-      && /^2(?:\.\d+)?$/.test(document.asset.version);
-  } catch {
-    return false;
+  if (size > bytes.length) {
+    const text = toText(bytes);
+    const trimmed = text.trimStart();
+    return trimmed.startsWith('{') && !trimmed.includes('\0');
   }
+  return isStructurallyValidGltfJson(bytes);
 }
 
 function isStructurallyValidObj(bytes) {
@@ -167,6 +343,16 @@ export class FileScanner {
   constructor({ openFile = fs.promises.open, openDirectory = fs.promises.opendir } = {}) {
     this.recordsById = new Map();
     this.idsByPath = new Map();
+    this.rootNodesByPath = new Map();
+    this.treeNodesById = new Map();
+    this.libraryRootIds = new Set();
+    this.treeMembershipsByRecordId = new Map();
+    this.catalogRevision = 0;
+    this.scanId = 0;
+    this.catalogChangeListeners = new Set();
+    this.catalogCursorSecret = randomBytes(32);
+    this.catalogOrderCache = null;
+    this.treeChildOrderCache = null;
     this.openFile = openFile;
     this.openDirectory = openDirectory;
     this.isScanning = false;
@@ -187,7 +373,46 @@ export class FileScanner {
       invalidModels: 0,
       selectedFolderCount: 0,
       truncated: false,
+      catalogRevision: this.catalogRevision,
+      scanId: this.scanId,
     };
+  }
+
+  #catalogChangeEvent() {
+    return {
+      catalogRevision: this.catalogRevision,
+      scanId: this.scanId,
+      modelCount: this.recordsById.size,
+      isScanning: this.isScanning,
+      status: this.status.status,
+    };
+  }
+
+  #emitCatalogChange() {
+    const event = this.#catalogChangeEvent();
+    for (const listener of this.catalogChangeListeners) {
+      try {
+        listener(event);
+      } catch {
+        // A consumer must not be able to interrupt secure local indexing.
+      }
+    }
+  }
+
+  #markCatalogChanged() {
+    this.catalogRevision += 1;
+    this.catalogOrderCache = null;
+    this.treeChildOrderCache = null;
+    this.status.catalogRevision = this.catalogRevision;
+    this.#emitCatalogChange();
+  }
+
+  onCatalogChange(listener) {
+    if (typeof listener !== 'function') {
+      throw new TypeError('Catalog listener must be a function.');
+    }
+    this.catalogChangeListeners.add(listener);
+    return () => this.catalogChangeListeners.delete(listener);
   }
 
   #isCancelled() {
@@ -216,6 +441,137 @@ export class FileScanner {
     return createHash('sha256').update(`folder:${relativeFolder}`).digest('hex').slice(0, 24);
   }
 
+  #catalogRootId(rootPath) {
+    return `${CATALOG_ROOT_ID_PREFIX}${createHash('sha256')
+      .update(`catalog-root:${rootPath}`)
+      .digest('hex')
+      .slice(0, 48)}`;
+  }
+
+  #catalogFolderId(rootPath, relativeDirectory) {
+    return `${CATALOG_FOLDER_ID_PREFIX}${createHash('sha256')
+      .update(`catalog-folder:${rootPath}\0${relativeDirectory}`)
+      .digest('hex')
+      .slice(0, 48)}`;
+  }
+
+  #toTreeFolderDto(node) {
+    return {
+      id: node.id,
+      name: node.name,
+      type: 'folder',
+      filesCount: node.filesCount,
+    };
+  }
+
+  #toTreeModelDto(record) {
+    return {
+      ...this.#toDto(record),
+      type: 'model',
+    };
+  }
+
+  #getOrCreateTreeRoot(rootPath) {
+    const existingRoot = this.rootNodesByPath.get(rootPath);
+    if (existingRoot) return existingRoot;
+
+    const root = {
+      id: this.#catalogRootId(rootPath),
+      name: path.basename(rootPath) || 'Biblioteca',
+      type: 'root',
+      rootPath,
+      relativeDirectory: '',
+      parentId: CATALOG_ROOT_ID,
+      filesCount: 0,
+      childIds: new Set(),
+      fileIds: new Set(),
+    };
+    this.rootNodesByPath.set(rootPath, root);
+    this.treeNodesById.set(root.id, root);
+    this.libraryRootIds.add(root.id);
+    return root;
+  }
+
+  #addRecordToTree(record) {
+    const root = this.#getOrCreateTreeRoot(record.rootPath);
+    const nodeIds = [root.id];
+    let currentNode = root;
+    const relativeDirectory = path.relative(record.rootPath, path.dirname(record.path));
+    const safeRelativeDirectory = relativeDirectory === '' ? '' : relativeDirectory.split(path.sep).join('/');
+    const segments = safeRelativeDirectory && isSafeRelativePath(safeRelativeDirectory)
+      ? safeRelativeDirectory.split('/')
+      : [];
+    let currentRelativeDirectory = '';
+
+    for (const segment of segments) {
+      currentRelativeDirectory = currentRelativeDirectory
+        ? `${currentRelativeDirectory}/${segment}`
+        : segment;
+      const nodeId = this.#catalogFolderId(record.rootPath, currentRelativeDirectory);
+      let child = this.treeNodesById.get(nodeId);
+      if (!child) {
+        child = {
+          id: nodeId,
+          name: segment,
+          type: 'folder',
+          rootPath: record.rootPath,
+          relativeDirectory: currentRelativeDirectory,
+          parentId: currentNode.id,
+          filesCount: 0,
+          childIds: new Set(),
+          fileIds: new Set(),
+        };
+        this.treeNodesById.set(nodeId, child);
+        currentNode.childIds.add(nodeId);
+      }
+      currentNode = child;
+      nodeIds.push(nodeId);
+    }
+
+    currentNode.fileIds.add(record.id);
+    for (const nodeId of nodeIds) {
+      const node = this.treeNodesById.get(nodeId);
+      if (node) node.filesCount += 1;
+    }
+    this.treeMembershipsByRecordId.set(record.id, { nodeIds });
+  }
+
+  #removeRecordFromTree(record) {
+    const membership = this.treeMembershipsByRecordId.get(record.id);
+    if (!membership) return;
+
+    const leaf = this.treeNodesById.get(membership.nodeIds.at(-1));
+    leaf?.fileIds.delete(record.id);
+    for (const nodeId of membership.nodeIds) {
+      const node = this.treeNodesById.get(nodeId);
+      if (node) node.filesCount = Math.max(0, node.filesCount - 1);
+    }
+    this.treeMembershipsByRecordId.delete(record.id);
+
+    for (const nodeId of [...membership.nodeIds].reverse()) {
+      const node = this.treeNodesById.get(nodeId);
+      if (!node || node.filesCount !== 0) continue;
+      if (node.type === 'root') {
+        this.libraryRootIds.delete(node.id);
+        this.rootNodesByPath.delete(node.rootPath);
+      } else {
+        this.treeNodesById.get(node.parentId)?.childIds.delete(node.id);
+      }
+      this.treeNodesById.delete(node.id);
+    }
+  }
+
+  #hasSameCatalogRecord(left, right) {
+    return left.id === right.id
+      && left.path === right.path
+      && left.rootPath === right.rootPath
+      && left.name === right.name
+      && left.extension === right.extension
+      && left.size === right.size
+      && left.modifiedAt === right.modifiedAt
+      && hasSameFileIdentity(left.identity, right.identity);
+  }
+
   #publishRecord(realPath, stats, rootPath) {
     const previousId = this.idsByPath.get(realPath);
     const previousRecord = previousId ? this.recordsById.get(previousId) : null;
@@ -234,11 +590,20 @@ export class FileScanner {
       identity: toFileIdentity(stats),
     };
 
-    if (previousId && previousId !== record.id) {
-      this.recordsById.delete(previousId);
+    if (previousRecord && this.#hasSameCatalogRecord(previousRecord, record)) {
+      return previousRecord;
+    }
+
+    if (previousRecord) {
+      this.#removeRecordFromTree(previousRecord);
+      if (previousId !== record.id) {
+        this.recordsById.delete(previousId);
+      }
     }
     this.recordsById.set(record.id, record);
     this.idsByPath.set(realPath, record.id);
+    this.#addRecordToTree(record);
+    this.#markCatalogChanged();
     return record;
   }
 
@@ -279,10 +644,18 @@ export class FileScanner {
     // This is synchronous map replacement: readers see either the live
     // progressive catalog or the complete selected-root catalog, never a
     // partially pruned pair of indexes.
+    let prunedRecords = false;
+    for (const [id, record] of this.recordsById) {
+      if (!finalRecordsById.has(id)) {
+        this.#removeRecordFromTree(record);
+        prunedRecords = true;
+      }
+    }
     this.recordsById = finalRecordsById;
     this.idsByPath = finalIdsByPath;
     this.status.foundModels = scanContext.discoveredPaths.size;
     this.status.availableModels = this.recordsById.size;
+    if (prunedRecords) this.#markCatalogChanged();
   }
 
   async #validateModelCandidate(realPath, expectedStats) {
@@ -351,122 +724,198 @@ export class FileScanner {
     await new Promise((resolve) => setImmediate(resolve));
   }
 
-  async #scanDirectory(directoryPath, rootPath, scanContext, pendingDirectories) {
+  async #closeDirectoryFrame(frame) {
+    try {
+      await frame.iterator?.return?.();
+    } catch {
+      // The explicit directory close below releases the descriptor when an
+      // iterator cannot finish cleanly.
+    }
+
+    try {
+      await frame.directory?.close?.();
+    } catch {
+      // fs.Dir may already be closed after iterator.return().
+    }
+  }
+
+  async #openDirectoryFrame(directoryPath, rootPath, activeDirectoryKeys) {
+    const directoryKey = getDirectoryVisitKey(directoryPath);
+    if (activeDirectoryKeys.has(directoryKey)) {
+      // A checked canonical descendant that resolves to an active ancestor is
+      // cyclic. Keep only ancestor keys, not a global set for every directory.
+      return null;
+    }
+
     let directory;
     try {
       directory = await this.openDirectory(directoryPath);
-      if (this.#isCancelled()) return true;
-      this.status.scannedDirectories += 1;
-      let entryCount = 0;
+      if (this.#isCancelled()) {
+        await this.#closeDirectoryFrame({ directory });
+        return null;
+      }
 
-      for await (const entry of directory) {
+      const iterator = directory?.[Symbol.asyncIterator]?.();
+      if (!iterator || typeof iterator.next !== 'function') {
+        throw new TypeError('Invalid directory iterator.');
+      }
+
+      activeDirectoryKeys.add(directoryKey);
+      this.status.scannedDirectories += 1;
+      return {
+        directoryPath,
+        rootPath,
+        directoryKey,
+        directory,
+        iterator,
+        entryCount: 0,
+      };
+    } catch {
+      await this.#closeDirectoryFrame({ directory });
+      this.status.skippedEntries += 1;
+      return null;
+    }
+  }
+
+  async #finishDirectoryFrame(frames, activeDirectoryKeys) {
+    const frame = frames.pop();
+    if (!frame) return;
+    activeDirectoryKeys.delete(frame.directoryKey);
+    await this.#closeDirectoryFrame(frame);
+  }
+
+  async #scanDirectoryEntry(entry, directoryPath, rootPath, scanContext) {
+    if (entry.isSymbolicLink()) {
+      this.status.skippedEntries += 1;
+      return null;
+    }
+
+    const candidatePath = path.resolve(directoryPath, entry.name);
+    if (!isPathInside(rootPath, candidatePath)) {
+      this.status.skippedEntries += 1;
+      return null;
+    }
+
+    if (entry.isDirectory()) {
+      try {
+        const entryStats = await fs.promises.lstat(candidatePath);
+        if (entryStats.isSymbolicLink() || !entryStats.isDirectory()) {
+          this.status.skippedEntries += 1;
+          return null;
+        }
+        const realDirectoryPath = await fs.promises.realpath(candidatePath);
+        if (!isPathInside(rootPath, realDirectoryPath)) {
+          this.status.skippedEntries += 1;
+          return null;
+        }
+        return { directoryPath: realDirectoryPath, rootPath };
+      } catch {
+        this.status.skippedEntries += 1;
+        return null;
+      }
+    }
+
+    if (!entry.isFile() || !isSupportedModelPath(candidatePath)) {
+      return null;
+    }
+
+    try {
+      const entryStats = await fs.promises.lstat(candidatePath);
+      if (entryStats.isSymbolicLink() || !entryStats.isFile()) {
+        this.status.skippedEntries += 1;
+        return null;
+      }
+      const realPath = await fs.promises.realpath(candidatePath);
+      const stats = await fs.promises.stat(realPath);
+      if (!isPathInside(rootPath, realPath) || !isSupportedModelPath(realPath)) {
+        this.status.skippedEntries += 1;
+        return null;
+      }
+      if (!isReadableRegularFile(stats)) {
+        this.status.skippedEntries += 1;
+        if (stats.isFile() && stats.size > MAX_MODEL_BYTES) {
+          this.status.oversizedModels += 1;
+        }
+        return null;
+      }
+
+      const structurallyValid = await this.#validateModelCandidate(realPath, stats);
+      if (structurallyValid !== true) {
+        this.status.skippedEntries += 1;
+        if (structurallyValid === false) {
+          this.status.invalidModels += 1;
+        }
+        return null;
+      }
+      if (this.#isCancelled()) return null;
+
+      this.#publishScannedRecord(scanContext, realPath, stats, rootPath);
+    } catch {
+      this.status.skippedEntries += 1;
+    }
+    return null;
+  }
+
+  async #scanDirectories(canonicalRoots, scanContext) {
+    const frames = [];
+    const activeDirectoryKeys = new Set();
+    let nextRootIndex = 0;
+
+    try {
+      while (frames.length > 0 || nextRootIndex < canonicalRoots.length) {
         if (this.#isCancelled()) return true;
-        entryCount += 1;
-        if (entryCount % SCAN_YIELD_INTERVAL === 0) {
+
+        if (frames.length === 0) {
+          const rootPath = canonicalRoots[nextRootIndex];
+          nextRootIndex += 1;
+          const rootFrame = await this.#openDirectoryFrame(rootPath, rootPath, activeDirectoryKeys);
+          if (rootFrame) frames.push(rootFrame);
+          continue;
+        }
+
+        const frame = frames.at(-1);
+        let nextEntry;
+        try {
+          nextEntry = await frame.iterator.next();
+        } catch {
+          this.status.skippedEntries += 1;
+          await this.#finishDirectoryFrame(frames, activeDirectoryKeys);
+          continue;
+        }
+
+        if (nextEntry.done) {
+          await this.#finishDirectoryFrame(frames, activeDirectoryKeys);
+          continue;
+        }
+        if (this.#isCancelled()) return true;
+
+        frame.entryCount += 1;
+        if (frame.entryCount % SCAN_YIELD_INTERVAL === 0) {
           await this.#yieldToEventLoop();
           if (this.#isCancelled()) return true;
         }
 
-        if (entry.isSymbolicLink()) {
-          this.status.skippedEntries += 1;
-          continue;
-        }
+        const childDirectory = await this.#scanDirectoryEntry(
+          nextEntry.value,
+          frame.directoryPath,
+          frame.rootPath,
+          scanContext,
+        );
+        if (this.#isCancelled()) return true;
+        if (!childDirectory) continue;
 
-        const candidatePath = path.resolve(directoryPath, entry.name);
-        if (!isPathInside(rootPath, candidatePath)) {
-          this.status.skippedEntries += 1;
-          continue;
-        }
-
-        if (entry.isDirectory()) {
-          try {
-            const entryStats = await fs.promises.lstat(candidatePath);
-            if (entryStats.isSymbolicLink() || !entryStats.isDirectory()) {
-              this.status.skippedEntries += 1;
-              continue;
-            }
-            const realDirectoryPath = await fs.promises.realpath(candidatePath);
-            if (!isPathInside(rootPath, realDirectoryPath)) {
-              this.status.skippedEntries += 1;
-              continue;
-            }
-            pendingDirectories.push({ directoryPath: realDirectoryPath, rootPath });
-          } catch {
-            this.status.skippedEntries += 1;
-          }
-          continue;
-        }
-
-        if (!entry.isFile() || !isSupportedModelPath(candidatePath)) {
-          continue;
-        }
-
-        try {
-          const entryStats = await fs.promises.lstat(candidatePath);
-          if (entryStats.isSymbolicLink() || !entryStats.isFile()) {
-            this.status.skippedEntries += 1;
-            continue;
-          }
-          const realPath = await fs.promises.realpath(candidatePath);
-          const stats = await fs.promises.stat(realPath);
-          if (!isPathInside(rootPath, realPath) || !isSupportedModelPath(realPath)) {
-            this.status.skippedEntries += 1;
-            continue;
-          }
-          if (!isReadableRegularFile(stats)) {
-            this.status.skippedEntries += 1;
-            if (stats.isFile() && stats.size > MAX_MODEL_BYTES) {
-              this.status.oversizedModels += 1;
-            }
-            continue;
-          }
-
-          const structurallyValid = await this.#validateModelCandidate(realPath, stats);
-          if (structurallyValid !== true) {
-            this.status.skippedEntries += 1;
-            if (structurallyValid === false) {
-              this.status.invalidModels += 1;
-            }
-            continue;
-          }
-          if (this.#isCancelled()) return true;
-
-          this.#publishScannedRecord(scanContext, realPath, stats, rootPath);
-        } catch {
-          this.status.skippedEntries += 1;
-        }
+        // Retain only open ancestor iterators. A directory with millions of
+        // siblings never materializes a matching global pending-directory list.
+        const childFrame = await this.#openDirectoryFrame(
+          childDirectory.directoryPath,
+          childDirectory.rootPath,
+          activeDirectoryKeys,
+        );
+        if (childFrame) frames.push(childFrame);
       }
-    } catch {
-      this.status.skippedEntries += 1;
     } finally {
-      if (directory) {
-        await directory.close().catch(() => undefined);
-      }
-    }
-    return this.#isCancelled();
-  }
-
-  async #scanDirectories(canonicalRoots, scanContext) {
-    const pendingDirectories = canonicalRoots.map((rootPath) => ({ directoryPath: rootPath, rootPath }));
-    const visitedDirectories = new Set();
-
-    while (pendingDirectories.length > 0) {
-      if (this.#isCancelled()) return true;
-
-      const current = pendingDirectories.pop();
-      const directoryKey = getDirectoryVisitKey(current.directoryPath);
-      if (visitedDirectories.has(directoryKey)) {
-        continue;
-      }
-      visitedDirectories.add(directoryKey);
-
-      if (await this.#scanDirectory(
-        current.directoryPath,
-        current.rootPath,
-        scanContext,
-        pendingDirectories,
-      )) {
-        return true;
+      while (frames.length > 0) {
+        await this.#finishDirectoryFrame(frames, activeDirectoryKeys);
       }
     }
 
@@ -480,7 +929,12 @@ export class FileScanner {
 
     this.isScanning = true;
     this.scanAbortController = new AbortController();
+    this.scanId += 1;
     this.status = this.#createStatus('scanning');
+    this.status.scanId = this.scanId;
+    // A new scan starts a new catalog snapshot even before its first model is
+    // published, so page cursors from an earlier snapshot cannot interleave.
+    this.#markCatalogChanged();
     const scanContext = {
       discoveredPaths: new Set(),
       externalPaths: new Set(),
@@ -498,6 +952,9 @@ export class FileScanner {
       }
       this.status.status = cancelled ? 'cancelled' : 'completed';
       this.status.availableModels = this.recordsById.size;
+      // Cancellation deliberately retains safe discoveries, but it is still a
+      // distinct snapshot boundary for consumers holding an older cursor.
+      if (cancelled && !scanContext.cancellationRevisionPublished) this.#markCatalogChanged();
       return {
         status: this.status.status,
         count: this.recordsById.size,
@@ -505,6 +962,7 @@ export class FileScanner {
       };
     } catch (error) {
       this.status.status = 'failed';
+      this.#markCatalogChanged();
       throw error;
     } finally {
       this.isScanning = false;
@@ -513,6 +971,7 @@ export class FileScanner {
         this.scanContext = null;
       }
       this.status.isScanning = false;
+      this.#emitCatalogChange();
     }
   }
 
@@ -522,6 +981,10 @@ export class FileScanner {
     }
 
     this.scanAbortController.abort();
+    if (this.scanContext) this.scanContext.cancellationRevisionPublished = true;
+    // Invalidate in-flight pages immediately. Files already published remain
+    // available, but they are now part of a cancellation snapshot.
+    this.#markCatalogChanged();
     return { cancelled: true, status: this.getStatus() };
   }
 
@@ -547,6 +1010,247 @@ export class FileScanner {
       this.status.status = 'completed';
     }
     return this.#toDto(record);
+  }
+
+  #cursorFilterFingerprint(value) {
+    return createHash('sha256').update(value).digest('base64url').slice(0, 32);
+  }
+
+  #encodeCatalogCursor({ scope, filterKey, offset }) {
+    const payload = Buffer.from(JSON.stringify({
+      v: CATALOG_CURSOR_VERSION,
+      r: this.catalogRevision,
+      s: scope,
+      f: this.#cursorFilterFingerprint(filterKey),
+      o: offset,
+    })).toString('base64url');
+    const signature = createHmac('sha256', this.catalogCursorSecret).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+  }
+
+  #decodeCatalogCursor(cursor, scope, filterKey) {
+    const parts = cursor.split('.');
+    if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]+$/.test(parts[1])) {
+      throw new TypeError('Invalid catalog cursor.');
+    }
+
+    const expectedSignature = createHmac('sha256', this.catalogCursorSecret).update(parts[0]).digest();
+    let actualSignature;
+    try {
+      actualSignature = Buffer.from(parts[1], 'base64url');
+    } catch {
+      throw new TypeError('Invalid catalog cursor.');
+    }
+    if (actualSignature.length !== expectedSignature.length
+      || !timingSafeEqual(actualSignature, expectedSignature)) {
+      throw new TypeError('Invalid catalog cursor.');
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    } catch {
+      throw new TypeError('Invalid catalog cursor.');
+    }
+    if (!isPlainObject(payload)
+      || payload.v !== CATALOG_CURSOR_VERSION
+      || payload.s !== scope
+      || !Number.isSafeInteger(payload.r)
+      || payload.r < 0
+      || !Number.isSafeInteger(payload.o)
+      || payload.o < 0
+      || typeof payload.f !== 'string'
+      || payload.f !== this.#cursorFilterFingerprint(filterKey)) {
+      throw new TypeError('Invalid catalog cursor.');
+    }
+    return payload;
+  }
+
+  #getOrderedRecordIds(filters) {
+    const key = catalogFilterKey(filters);
+    if (this.catalogOrderCache
+      && this.catalogOrderCache.revision === this.catalogRevision
+      && this.catalogOrderCache.key === key) {
+      return this.catalogOrderCache.ids;
+    }
+
+    const extension = filters.extension === 'all' ? '' : `.${filters.extension}`;
+    const query = filters.query.toLocaleLowerCase();
+    const multiplier = filters.order === 'asc' ? 1 : -1;
+    const ids = [...this.recordsById.values()]
+      .filter((record) => !extension || record.extension === extension)
+      .filter((record) => !query || record.name.toLocaleLowerCase().includes(query))
+      .sort((left, right) => {
+        const leftValue = left[filters.sortBy];
+        const rightValue = right[filters.sortBy];
+        if (typeof leftValue === 'string') {
+          return multiplier * leftValue.localeCompare(rightValue);
+        }
+        return multiplier * (leftValue - rightValue);
+      })
+      .map((record) => record.id);
+
+    // Preserve only the active ordering. It avoids repeatedly rebuilding a
+    // whole-array sort while keeping the cache bounded for unbounded libraries.
+    this.catalogOrderCache = { revision: this.catalogRevision, key, ids };
+    return ids;
+  }
+
+  #getOrderedTreeEntries(parentId) {
+    const cache = this.treeChildOrderCache;
+    if (cache && cache.revision === this.catalogRevision && cache.parentId === parentId) {
+      return cache.entries;
+    }
+
+    const node = parentId === CATALOG_ROOT_ID
+      ? { childIds: this.libraryRootIds, fileIds: new Set() }
+      : this.treeNodesById.get(parentId);
+    if (!node) return null;
+
+    const entries = [
+      ...node.childIds,
+    ].map((id) => ({ type: 'folder', id }))
+      .concat([...node.fileIds].map((id) => ({ type: 'model', id })))
+      .sort((left, right) => {
+        if (left.type !== right.type) return left.type === 'folder' ? -1 : 1;
+        const leftName = left.type === 'folder'
+          ? this.treeNodesById.get(left.id)?.name
+          : this.recordsById.get(left.id)?.name;
+        const rightName = right.type === 'folder'
+          ? this.treeNodesById.get(right.id)?.name
+          : this.recordsById.get(right.id)?.name;
+        return (leftName || '').localeCompare(rightName || '');
+      });
+    this.treeChildOrderCache = { revision: this.catalogRevision, parentId, entries };
+    return entries;
+  }
+
+  #buildCatalogResponse({ reset = false, total = this.recordsById.size, items = [], nextCursor = null }) {
+    return {
+      catalogRevision: this.catalogRevision,
+      scanId: this.scanId,
+      isScanning: this.isScanning,
+      reset,
+      total,
+      items,
+      nextCursor,
+    };
+  }
+
+  getCatalogPage(request) {
+    const normalized = normalizeCatalogPageRequest(request);
+    const filterKey = catalogFilterKey(normalized.filters);
+    if (normalized.revision !== null && normalized.revision !== this.catalogRevision) {
+      return this.#buildCatalogResponse({ reset: true });
+    }
+
+    let offset = 0;
+    if (normalized.cursor) {
+      const cursor = this.#decodeCatalogCursor(normalized.cursor, 'models', filterKey);
+      if (cursor.r !== this.catalogRevision) {
+        return this.#buildCatalogResponse({ reset: true });
+      }
+      offset = cursor.o;
+    }
+
+    const ids = this.#getOrderedRecordIds(normalized.filters);
+    const pageIds = ids.slice(offset, offset + normalized.limit);
+    const nextOffset = offset + pageIds.length;
+    return this.#buildCatalogResponse({
+      total: ids.length,
+      items: pageIds.map((id) => this.recordsById.get(id)).filter(Boolean).map((record) => this.#toDto(record)),
+      nextCursor: nextOffset < ids.length
+        ? this.#encodeCatalogCursor({ scope: 'models', filterKey, offset: nextOffset })
+        : null,
+    });
+  }
+
+  getTreeChildren(request) {
+    const normalized = normalizeTreeChildrenRequest(request);
+    const filterKey = `tree:${normalized.parentId}`;
+    if (normalized.revision !== null && normalized.revision !== this.catalogRevision) {
+      return this.#buildCatalogResponse({ reset: true });
+    }
+
+    let offset = 0;
+    if (normalized.cursor) {
+      const cursor = this.#decodeCatalogCursor(normalized.cursor, 'tree', filterKey);
+      if (cursor.r !== this.catalogRevision) {
+        return this.#buildCatalogResponse({ reset: true });
+      }
+      offset = cursor.o;
+    }
+
+    const entries = this.#getOrderedTreeEntries(normalized.parentId);
+    if (!entries) {
+      return this.#buildCatalogResponse({ total: 0 });
+    }
+    const pageEntries = entries.slice(offset, offset + normalized.limit);
+    const nextOffset = offset + pageEntries.length;
+    return this.#buildCatalogResponse({
+      total: entries.length,
+      items: pageEntries.flatMap((entry) => {
+        const value = entry.type === 'folder'
+          ? this.treeNodesById.get(entry.id)
+          : this.recordsById.get(entry.id);
+        if (!value) return [];
+        return entry.type === 'folder' ? this.#toTreeFolderDto(value) : this.#toTreeModelDto(value);
+      }),
+      nextCursor: nextOffset < entries.length
+        ? this.#encodeCatalogCursor({ scope: 'tree', filterKey, offset: nextOffset })
+        : null,
+    });
+  }
+
+  getCatalogNeighbor(request) {
+    const normalized = normalizeCatalogNeighborRequest(request);
+    if (normalized.revision !== null && normalized.revision !== this.catalogRevision) {
+      return {
+        catalogRevision: this.catalogRevision,
+        scanId: this.scanId,
+        reset: true,
+        model: null,
+      };
+    }
+
+    const ids = this.#getOrderedRecordIds(normalized.filters);
+    if (ids.length === 0) {
+      return {
+        catalogRevision: this.catalogRevision,
+        scanId: this.scanId,
+        reset: false,
+        model: null,
+      };
+    }
+
+    let index;
+    if (normalized.relation === 'random') {
+      index = randomInt(ids.length);
+      if (normalized.id && ids.length > 1) {
+        const currentIndex = ids.indexOf(normalized.id);
+        if (currentIndex >= 0 && index === currentIndex) index = (index + 1) % ids.length;
+      }
+    } else {
+      const currentIndex = ids.indexOf(normalized.id);
+      // Preserve the original toolbar's cyclic navigation even though the
+      // renderer now holds only a page. When a new filter excludes the model
+      // currently open in the viewport, resume from the first matching entry
+      // instead of leaving previous/next unusable.
+      if (currentIndex < 0) {
+        index = 0;
+      } else if (normalized.relation === 'previous') {
+        index = (currentIndex - 1 + ids.length) % ids.length;
+      } else {
+        index = (currentIndex + 1) % ids.length;
+      }
+    }
+    const record = index >= 0 ? this.recordsById.get(ids[index]) : null;
+    return {
+      catalogRevision: this.catalogRevision,
+      scanId: this.scanId,
+      reset: false,
+      model: record ? this.#toDto(record) : null,
+    };
   }
 
   listModels(filters) {

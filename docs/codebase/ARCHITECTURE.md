@@ -23,9 +23,10 @@ native folder picker or dropped File
 2. `registerIpcHandler` verifies the sender, top frame and renderer origin before the main process handles a request (`electron/main.js:116-141`).
 3. `FileScanner` canonicalises user-selected roots, traverses them cycle-safely and cancellably, and stores private paths only in memory (`electron/file-scanner.js`).
 4. Renderer DTOs expose name, extension, size, timestamp and opaque ID, never a path (`electron/file-scanner.js:70-79`).
-5. The private protocol resolves an ID, opens an identity-checked descriptor and streams it with a safe MIME type (`electron/main.js:82-114`, `electron/file-scanner.js:328-396`).
-6. `load3DModel` blocks remote sidecars, supports cancellation, enforces decoded-resource budgets and returns a clean export clone (`src/utils/loaders.js:419-489`).
-7. KTX2/Basis keeps the renderer CSP strict: a fixed same-origin static worker receives the legacy dynamic-code exception, has no network or bridge access, and returns only transcoded texture data (`src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js`).
+5. The renderer requests revisioned catalog/tree pages and metadata-only change notifications through the same validated capability boundary; it never receives a native path or a full-library refresh (`electron/main.js`, `electron/preload.cjs`, `electron/file-scanner.js`).
+6. The private protocol resolves an ID, opens an identity-checked descriptor and streams it with a safe MIME type (`electron/main.js`, `electron/file-scanner.js`).
+7. `load3DModel` blocks remote sidecars, supports cancellation, applies per-load source/request and decoded-resource budgets, and returns a clean export clone (`src/utils/loaders.js`).
+8. KTX2/Basis keeps the renderer CSP strict: a fixed same-origin static worker receives the legacy dynamic-code exception, has no network or bridge access, and returns only transcoded texture data (`src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js`).
 
 ## 3) Layer/Module Responsibilities
 
@@ -35,7 +36,7 @@ native folder picker or dropped File
 | `electron/file-scanner.js` | User-approved path registry, progressive structurally-valid discovery, opaque IDs and safe file handles | DOM state or network transport | `electron/file-scanner.js` |
 | `electron/security.js` | Shared allowlists, URL/path validation and MIME mapping | Filesystem I/O | `electron/security.js:3-224` |
 | `electron/preload.cjs` | Narrow capability surface | Final authorization decisions | `electron/preload.cjs:40-103` |
-| `src/App.jsx` | Product state, catalog orchestration, selection and export actions | Native paths or Electron modules | `src/App.jsx:31-500` |
+| `src/App.jsx` | Product state, revisioned catalog orchestration, selection and export actions | Native paths or Electron modules | `src/App.jsx` |
 | `src/components/Viewport3D.jsx` | Three.js lifecycle, camera, animation and GPU resources | Native filesystem access | `src/components/Viewport3D.jsx:36-660` |
 | `src/utils/loaders.js` | Format adapters, resource budgets, stats and disposal | User-interface layout | `src/utils/loaders.js:4-601` |
 | `src/utils/ktx2-static-worker.js` / `public/basis/ktx2-transcoder-worker.js` | Bind the trusted static Basis worker without relaxing renderer CSP | Renderer IPC, DOM or arbitrary worker URLs | `src/utils/ktx2-static-worker.js:1`, `public/basis/ktx2-transcoder-worker.js:1` |
@@ -54,7 +55,7 @@ native folder picker or dropped File
 
 ## 5) Known Architectural Risks
 
-- Three.js parsers still process the complete file before decoded-resource budgets can reject the resulting scene. The file cap, private protocol and post-parse budgets reduce exposure but do not constitute a malware sandbox (`src/utils/loaders.js:83-124`, `src/utils/loaders.js:472`).
+- Three.js parsers can still spend CPU and memory decoding a compact-but-expansive asset before decoded-resource budgets reject the resulting scene. Streamed source/request budgets, the per-file cap and the private protocol reduce transfer exposure but do not constitute a malware sandbox (`src/utils/loaders.js`).
 - The packaged self-test now loads ten representative scenarios across all seven advertised extensions, but format fidelity beyond that corpus and clean Windows/AT/constrained-GPU evidence remain open (`docs/PRODUCT_READINESS.md`).
 - `App.jsx`, `Viewport3D.jsx`, `loaders.js` and artifact smoke scripts are high-churn, multi-responsibility files; changes require focused and packaged regression tests.
 

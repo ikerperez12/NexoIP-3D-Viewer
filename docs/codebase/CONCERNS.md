@@ -34,8 +34,8 @@
 | --- | --- | --- | --- | --- |
 | Demand-render scheduler | `src/utils/render-loop.js`, `src/components/Viewport3D.jsx` | Idle frames now stop when no animation, interaction, damping or auto-rotation is active | Regressions can reintroduce background work | Preserve scheduler unit tests and add a packaged frame/energy baseline before stable |
 | Main Three.js chunk | Vite build reports `three.module` about 534.53 kB minified / 135.03 kB gzip | Build warning above 500 kB | Startup/read latency on slower disks | Preserve dynamic loader chunks; evaluate named imports and chunk policy with measurements |
-| Post-parse resource accounting | `src/utils/loaders.js:472` | Budget protects commit, not peak parser allocation | Peak memory may exceed the final scene budget | Add decompression-heavy negative fixtures and worker/time budgets |
-| Full tree and catalog held in memory | `electron/file-scanner.js`, `src/components/FileLibrarySidebar.jsx` | A selected library is not capped by model count; the renderer paginates direct tree entries | Backend map and tree construction cost grow with catalog size | Benchmark very large real libraries; add backend pagination if memory or first-paint measurements require it |
+| Parser resource accounting | `src/utils/loaders.js` | Per-load streamed source/request budgets and decoded-scene budgets bound known resource classes | A parser can still allocate or block while decoding a compact but expansive asset | Add decompression-heavy negative fixtures and worker/time budgets |
+| Authoritative session catalog held in memory | `electron/file-scanner.js`, `src/App.jsx`, `src/components/FileLibrarySidebar.jsx` | The renderer receives bounded revisioned catalog/tree pages and expands folders lazily; no full-library IPC refresh remains | The private main-process registry and sort/index work still grow with catalog size | Benchmark very large real libraries; evolve the internal index only if measured memory or query latency warrants it |
 
 ## 5) Fragile/High-Churn Areas
 

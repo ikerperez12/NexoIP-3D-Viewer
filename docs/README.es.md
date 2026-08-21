@@ -38,7 +38,7 @@ Get-Content .\SHA256SUMS.txt
 
 ## Privacidad real
 
-La aplicación no incluye telemetría, cuentas, analítica, comprobaciones remotas ni servidor HTTP. Tampoco escanea automáticamente el equipo. Un diálogo nativo permite seleccionar las carpetas que quieres indexar y arrastrar un archivo autoriza únicamente ese modelo.
+La aplicación no incluye telemetría, cuentas, analítica, comprobaciones remotas ni servidor HTTP. Tampoco escanea automáticamente el equipo. Un diálogo nativo permite seleccionar las carpetas que quieres indexar y arrastrar un archivo autoriza únicamente ese modelo. El descubrimiento es progresivo: los modelos compatibles que superan la comprobación estructural se incorporan a la biblioteca mientras el escaneo sigue activo. La interfaz recibe páginas acotadas y revisadas del catálogo y abre cada carpeta del árbol bajo demanda, sin copiar la biblioteca entera en cada actualización. No hay un tope arbitrario de profundidad, entradas o modelos en las carpetas elegidas; se conservan las defensas de ruta canónica, archivo regular, tamaño por archivo y validación estructural.
 
 La interfaz se ejecuta aislada y sin acceso a Node.js ni a rutas del sistema. El proceso principal valida todas las operaciones, devuelve identificadores opacos y solo sirve modelos ya autorizados. Se bloquean navegación externa, ventanas emergentes, permisos y `webview`.
 

@@ -44,11 +44,36 @@ const APP_SESSION_PARTITION = 'nexoip-ephemeral';
 
 let mainWindow = null;
 let applicationSession = null;
+let pendingCatalogChange = null;
+let catalogChangeTimer = null;
 const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
 let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
 const unsafeStartupArguments = app.isPackaged ? findUnsafePackagedArguments(startupArguments) : [];
 const packagedSelfTestRequest = app.isPackaged ? getPackagedSelfTestRequest(startupArguments) : null;
 const startupIsAllowed = unsafeStartupArguments.length === 0 && (!packagedSelfTestRequest || packagedSelfTestRequest.valid);
+
+function flushCatalogChange() {
+  catalogChangeTimer = null;
+  const change = pendingCatalogChange;
+  pendingCatalogChange = null;
+  if (!change || !mainWindow || mainWindow.isDestroyed()) return;
+
+  const contents = mainWindow.webContents;
+  if (!isAllowedRendererUrl(contents.getURL(), app.isPackaged)) return;
+  // This signal intentionally contains only snapshot metadata. A renderer
+  // must request a bounded page or a lazy tree branch after receiving it.
+  contents.send('nexoip:catalog-changed', change);
+}
+
+function queueCatalogChange(change) {
+  pendingCatalogChange = change;
+  if (catalogChangeTimer) return;
+  // A dense progressive scan may publish thousands of safe models. Coalesce
+  // those publications without delaying the first usable catalog state.
+  catalogChangeTimer = setTimeout(flushCatalogChange, 50);
+}
+
+scanner.onCatalogChange(queueCatalogChange);
 
 if (!startupIsAllowed) {
   const reason = unsafeStartupArguments.length > 0
@@ -146,6 +171,9 @@ function registerIpcHandler(channel, handler) {
 function registerIpcHandlers() {
   registerIpcHandler('nexoip:list-models', (filters) => scanner.listModels(normalizeFilters(filters)));
   registerIpcHandler('nexoip:get-tree', () => scanner.getTree());
+  registerIpcHandler('nexoip:get-catalog-page', (request) => scanner.getCatalogPage(request));
+  registerIpcHandler('nexoip:get-tree-children', (request) => scanner.getTreeChildren(request));
+  registerIpcHandler('nexoip:get-catalog-neighbor', (request) => scanner.getCatalogNeighbor(request));
   registerIpcHandler('nexoip:get-scan-status', () => scanner.getStatus());
   registerIpcHandler('nexoip:cancel-scan', () => scanner.cancelScan());
   registerIpcHandler('nexoip:consume-startup-model', async () => {

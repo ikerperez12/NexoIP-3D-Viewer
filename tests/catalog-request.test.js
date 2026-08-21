@@ -3,6 +3,12 @@ import {
   createCatalogRefreshQueue,
   createCatalogRequestGuard,
   getPublishedModelCount,
+  mergeCatalogPage,
+  responseCatalogChange,
+  responseCatalogNeighbor,
+  responseCatalogPage,
+  supportsCatalogChangeSubscription,
+  supportsCatalogV2,
 } from '../src/utils/catalog-request.js';
 
 test('a stale catalog response cannot overwrite a newer model-opened catalog selection', async () => {
@@ -69,4 +75,60 @@ test('uses the live published count and falls back to legacy scan discovery fiel
   expect(getPublishedModelCount({ foundFiles: 2 })).toBe(2);
   expect(getPublishedModelCount({ availableModels: -1, foundModels: 3 })).toBe(3);
   expect(getPublishedModelCount({ availableModels: 3.5 })).toBeNull();
+});
+
+test('accepts only bounded v2 catalog contracts and keeps snapshot pages immutable by revision', () => {
+  const bridge = {
+    getCatalogPage() {},
+    getTreeChildren() {},
+    getCatalogNeighbor() {},
+    subscribeCatalogChanges() {},
+  };
+  expect(supportsCatalogV2(bridge)).toBe(true);
+  expect(supportsCatalogChangeSubscription(bridge)).toBe(true);
+  expect(supportsCatalogChangeSubscription({ ...bridge, subscribeCatalogChanges: undefined })).toBe(false);
+
+  const page = responseCatalogPage({
+    catalogRevision: 9,
+    scanId: 2,
+    isScanning: true,
+    reset: false,
+    total: 250,
+    nextCursor: 'next',
+    items: [{ id: 'first', name: 'first.glb' }],
+  });
+  expect(page.items).toEqual([{ id: 'first', name: 'first.glb' }]);
+  expect(mergeCatalogPage({ items: [{ id: 'old' }] }, page, { append: true })).toMatchObject({
+    catalogRevision: 9,
+    isScanning: true,
+    total: 250,
+    nextCursor: 'next',
+    items: [{ id: 'old' }, { id: 'first', name: 'first.glb' }],
+  });
+  expect(mergeCatalogPage(null, { ...page, reset: true })).toMatchObject({
+    requiresReset: true,
+    items: [],
+    catalogRevision: 9,
+  });
+  expect(responseCatalogPage({ ...page, catalogRevision: -1 })).toBeNull();
+  expect(responseCatalogPage({ ...page, items: [{ name: 'missing-id.glb' }] })).toBeNull();
+});
+
+test('rejects malformed navigation and change events before they can replace visible catalog state', () => {
+  expect(responseCatalogNeighbor({
+    catalogRevision: 4,
+    scanId: 2,
+    reset: false,
+    model: { id: 'model-4', name: 'current.glb' },
+  })).toMatchObject({ model: { id: 'model-4' } });
+  expect(responseCatalogNeighbor({ catalogRevision: 4, scanId: 2, reset: false, model: { name: 'unsafe' } })).toBeNull();
+
+  expect(responseCatalogChange({
+    catalogRevision: 5,
+    scanId: 2,
+    modelCount: 12,
+    isScanning: true,
+    status: 'scanning',
+  })).toMatchObject({ catalogRevision: 5, modelCount: 12 });
+  expect(responseCatalogChange({ catalogRevision: 5, scanId: 2, modelCount: -1, isScanning: true, status: 'scanning' })).toBeNull();
 });

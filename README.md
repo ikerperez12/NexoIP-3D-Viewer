@@ -31,7 +31,7 @@ Screenshot model: [Industrial Microscope by Lukas Walzer on Poly Haven](https://
 
 ## What the alpha does
 
-NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app.
+NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app. Discovery is progressive: structurally verified compatible models become available while a selected folder is still being scanned. The renderer receives bounded, revisioned catalog pages and opens folder nodes lazily, so a growing library is not copied wholesale for each refresh. There is no arbitrary cap on selected-folder depth, entry count, or model count; regular-file, canonical-path, per-file-size, and structural-validation safeguards still apply.
 
 The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`. The source and packaged matrices now exercise all seven extensions through ten real loads: animated GLB, external-buffer/textured glTF, required `EXT_meshopt_compression`, Draco, KTX2/Basis, textured multi-MTL OBJ, ASCII STL (with separate binary-colour unit coverage), static FBX, coloured PLY, and centimetre/Z-up textured/animated DAE. Those checks prove these representative paths inside the EXE; they do not promise complete scene, material, animation, or export fidelity for every file in a format. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
 
