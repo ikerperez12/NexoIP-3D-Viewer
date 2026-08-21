@@ -283,7 +283,12 @@ async function runConfiguredPackagedSelfTest() {
   if (report.status !== 'passed') {
     throw new Error(report.error || 'The packaged self-test failed.');
   }
-  process.stdout.write('NexoIP packaged self-test passed without a debugging transport.\n');
+  await new Promise((resolve, reject) => {
+    process.stdout.write('NexoIP packaged self-test passed without a debugging transport.\n', (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 if (startupIsAllowed) {
@@ -296,7 +301,10 @@ if (startupIsAllowed) {
       await createWindow({ show: !packagedSelfTestRequest });
       if (packagedSelfTestRequest) {
         await runConfiguredPackagedSelfTest();
-        app.quit();
+        // The self-test has written its durable report and flushed its completion marker.
+        // Exit directly so a decoder worker cannot keep this non-interactive process alive.
+        app.exit(0);
+        return;
       }
     } catch (error) {
       process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${error instanceof Error ? error.message : String(error)}\n`);
