@@ -5,6 +5,7 @@ import { AlertTriangle, RefreshCw, UploadCloud } from 'lucide-react';
 import { disposeModelResources, load3DModel } from '../utils/loaders.js';
 import { callNexoip, responseModelUrl } from '../utils/nexoip.js';
 import { applyCameraAction } from '../utils/camera-controls.js';
+import { createDemandRenderScheduler } from '../utils/render-loop.js';
 
 function disposeLightGroup(group) {
   group?.traverse((object) => object.shadow?.dispose?.());
@@ -67,7 +68,6 @@ export default function Viewport3D({
   const mixerRef = useRef(null);
   const activeActionRef = useRef(null);
   const animationsRef = useRef([]);
-  const clockRef = useRef(new THREE.Clock());
   const lightsGroupRef = useRef(null);
   const gridHelperRef = useRef(null);
   const axesHelperRef = useRef(null);
@@ -77,12 +77,25 @@ export default function Viewport3D({
   const loadAbortRef = useRef(null);
   const snapshotInProgressRef = useRef(false);
   const errorDialogRef = useRef(null);
+  const invalidateRef = useRef(() => false);
+  const controlsInteractionRef = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [loadProgress, setLoadProgress] = useState(null);
   const [error, setError] = useState(null);
+  const [rendererError, setRendererError] = useState(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [contextLost, setContextLost] = useState(false);
+  const [rendererGeneration, setRendererGeneration] = useState(0);
+
+  const invalidateViewport = () => invalidateRef.current();
+  const getContainerSize = () => {
+    const bounds = containerRef.current?.getBoundingClientRect();
+    return {
+      width: Math.max(Math.floor(bounds?.width || 0), 1),
+      height: Math.max(Math.floor(bounds?.height || 0), 1),
+    };
+  };
 
   const updateOrthographicFrustum = (camera, width, height) => {
     if (!camera) return;
@@ -136,6 +149,7 @@ export default function Viewport3D({
       color: palette[2], intensity: 2.4, position: new THREE.Vector3(0, 20, 2),
       angle: Math.PI / 4, penumbra: 0.35
     });
+    invalidateViewport();
   };
 
   const disposePreviewMaterials = () => {
@@ -171,6 +185,7 @@ export default function Viewport3D({
     activeActionRef.current = null;
     animationsRef.current = [];
     originalMaterialsRef.current.clear();
+    invalidateViewport();
   };
 
   const centerAndFitCamera = (object) => {
@@ -206,6 +221,7 @@ export default function Viewport3D({
     camera.lookAt(controls.target);
     controls.update();
     gridHelperRef.current?.scale.setScalar(Math.max(1, maxDimension / 10));
+    invalidateViewport();
   };
 
   const applyRenderMode = (mode) => {
@@ -213,7 +229,10 @@ export default function Viewport3D({
     if (!model) return;
 
     restoreOriginalMaterials();
-    if (mode === 'pbr') return;
+    if (mode === 'pbr') {
+      invalidateViewport();
+      return;
+    }
 
     model.traverse((child) => {
       if (!child.isMesh) return;
@@ -241,6 +260,7 @@ export default function Viewport3D({
         previewMaterialsRef.current.add(previewMaterial);
       }
     });
+    invalidateViewport();
   };
 
   useEffect(() => {
@@ -251,16 +271,8 @@ export default function Viewport3D({
     scene.background = new THREE.Color(0x000000);
     sceneRef.current = scene;
 
-    // clientWidth/clientHeight stay in the unzoomed layout coordinate space in
-    // Electron. The rendered box is the reliable size at browser zoom, so it
-    // prevents the WebGL canvas from expanding beyond the accessible viewport.
-    const getContainerSize = () => {
-      const bounds = container.getBoundingClientRect();
-      return {
-        width: Math.max(Math.floor(bounds.width), 1),
-        height: Math.max(Math.floor(bounds.height), 1),
-      };
-    };
+    // The rendered box stays accurate at browser zoom and prevents the WebGL
+    // canvas from expanding beyond the accessible viewport.
     const { width, height } = getContainerSize();
     const perspectiveCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     const orthographicCamera = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 1000);
@@ -270,29 +282,56 @@ export default function Viewport3D({
     orthographicCamera.position.copy(perspectiveCamera.position);
     perspectiveCameraRef.current = perspectiveCamera;
     orthographicCameraRef.current = orthographicCamera;
-    cameraRef.current = perspectiveCamera;
+    const initialCamera = isOrthographic ? orthographicCamera : perspectiveCamera;
+    cameraRef.current = initialCamera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    renderer.setSize(width, height, false);
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    container.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
+    let renderer;
+    let controls;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setSize(width, height, false);
+      renderer.domElement.style.display = 'block';
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.2;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      container.appendChild(renderer.domElement);
+      rendererRef.current = renderer;
 
-    const controls = new OrbitControls(perspectiveCamera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
-    controls.maxPolarAngle = Math.PI;
-    controlsRef.current = controls;
-    controls.listenToKeyEvents(container);
-    updateCameraEvidence(container, perspectiveCamera, controls);
+      controls = new OrbitControls(initialCamera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.06;
+      controls.maxPolarAngle = Math.PI;
+      controls.autoRotate = autoRotate;
+      controls.autoRotateSpeed = 1.6;
+      controlsRef.current = controls;
+      controls.listenToKeyEvents(container);
+      updateCameraEvidence(container, initialCamera, controls);
+    } catch (rendererError) {
+      controls?.dispose();
+      renderer?.dispose();
+      renderer?.domElement?.remove();
+      rendererRef.current = null;
+      controlsRef.current = null;
+      const detail = rendererError instanceof Error ? rendererError.message : 'Error WebGL desconocido.';
+      const failureTimer = window.setTimeout(() => {
+        setLoading(false);
+        setContextLost(true);
+        setRendererError(`No se pudo iniciar el renderizado 3D (${detail}). Actualiza el controlador gráfico o cierra otras aplicaciones 3D y pulsa Recuperar vista.`);
+      }, 0);
+      return () => {
+        window.clearTimeout(failureTimer);
+        scene.clear();
+        sceneRef.current = null;
+        cameraRef.current = null;
+        perspectiveCameraRef.current = null;
+        orthographicCameraRef.current = null;
+      };
+    }
 
     const lights = new THREE.Group();
     scene.add(lights);
@@ -300,40 +339,62 @@ export default function Viewport3D({
     setupLighting(lights, envPreset);
 
     const grid = new THREE.GridHelper(20, 20, 0x6b7280, 0x1f2937);
+    grid.visible = showGrid;
     scene.add(grid);
     gridHelperRef.current = grid;
     const axes = new THREE.AxesHelper(2);
+    axes.visible = showAxes;
     scene.add(axes);
     axesHelperRef.current = axes;
 
-    let frameId = 0;
-    const renderFrame = () => {
-      frameId = window.requestAnimationFrame(renderFrame);
-      const delta = Math.min(clockRef.current.getDelta(), 0.1);
-      mixerRef.current?.update(delta);
-      controls.update();
-      renderer.render(scene, cameraRef.current);
+    let scheduler;
+    let readyTimer = null;
+    const reportRendererFailure = (renderError) => {
+      if (readyTimer !== null) window.clearTimeout(readyTimer);
+      scheduler?.setSuspended(true);
+      const detail = renderError instanceof Error ? renderError.message : 'Error WebGL desconocido.';
+      setContextLost(true);
+      setRendererError(`La vista 3D dejó de responder (${detail}). Cierra otras aplicaciones 3D y pulsa Recuperar vista.`);
+    };
+    scheduler = createDemandRenderScheduler({
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+      onFrame: ({ timestamp, deltaSeconds }) => {
+        const actionBeforeUpdate = activeActionRef.current;
+        if (actionBeforeUpdate?.isRunning?.()) mixerRef.current?.update(deltaSeconds);
+        const controlsChanged = controls.update(deltaSeconds);
+        renderer.render(scene, cameraRef.current);
 
-      const action = activeActionRef.current;
-      const now = performance.now();
-      if (action?.getClip().duration && now - lastProgressTimeRef.current > 80) {
-        lastProgressTimeRef.current = now;
-        onAnimationProgress?.(THREE.MathUtils.clamp(action.time / action.getClip().duration, 0, 1));
-      }
+        const action = activeActionRef.current;
+        if (action?.getClip().duration && timestamp - lastProgressTimeRef.current > 80) {
+          lastProgressTimeRef.current = timestamp;
+          onAnimationProgress?.(THREE.MathUtils.clamp(action.time / action.getClip().duration, 0, 1));
+        }
+        return Boolean(
+          controlsInteractionRef.current
+          || controls.autoRotate
+          || controlsChanged
+          || action?.isRunning?.()
+        );
+      },
+      onError: reportRendererFailure,
+    });
+    invalidateRef.current = scheduler.invalidate;
+
+    const handleControlStart = () => {
+      controlsInteractionRef.current = true;
+      scheduler.invalidate();
     };
-    const startRendering = () => {
-      if (!document.hidden && !frameId) {
-        clockRef.current.start();
-        renderFrame();
-      }
+    const handleControlChange = () => scheduler.invalidate();
+    const handleControlEnd = () => {
+      controlsInteractionRef.current = false;
+      scheduler.invalidate();
     };
+    controls.addEventListener('start', handleControlStart);
+    controls.addEventListener('change', handleControlChange);
+    controls.addEventListener('end', handleControlEnd);
     const handleVisibilityChange = () => {
-      if (document.hidden) {
-        window.cancelAnimationFrame(frameId);
-        frameId = 0;
-      } else {
-        startRendering();
-      }
+      scheduler.setSuspended(document.hidden);
     };
     const resize = () => {
       const { width: nextWidth, height: nextHeight } = getContainerSize();
@@ -341,29 +402,37 @@ export default function Viewport3D({
       perspectiveCamera.updateProjectionMatrix();
       updateOrthographicFrustum(orthographicCamera, nextWidth, nextHeight);
       renderer.setSize(nextWidth, nextHeight, false);
+      scheduler.invalidate();
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
     const handleContextLost = (event) => {
       event.preventDefault();
+      if (readyTimer !== null) window.clearTimeout(readyTimer);
+      scheduler.setSuspended(true);
       setContextLost(true);
-      setError('La GPU perdió el contexto de renderizado. Cierra otras aplicaciones 3D e intenta recuperar la vista.');
+      setRendererError('La GPU perdió el contexto de renderizado. Cierra otras aplicaciones 3D y pulsa Recuperar vista para crear un lienzo nuevo.');
     };
     const handleContextRestored = () => {
-      setContextLost(false);
-      setError(null);
-      setRetryNonce((value) => value + 1);
+      setRendererGeneration((value) => value + 1);
     };
     renderer.domElement.addEventListener('webglcontextlost', handleContextLost);
     renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored);
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    startRendering();
+    container.dataset.rendererGeneration = String(rendererGeneration);
+    container.dataset.renderLoop = 'demand';
+    scheduler.setSuspended(document.hidden);
+    scheduler.invalidate();
+    readyTimer = window.setTimeout(() => {
+      setContextLost(false);
+      setRendererError(null);
+    }, 0);
 
     return () => {
+      if (readyTimer !== null) window.clearTimeout(readyTimer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resizeObserver.disconnect();
       loadAbortRef.current?.abort();
-      window.cancelAnimationFrame(frameId);
       releaseCurrentModel();
       disposeLightGroup(lights);
       grid.geometry.dispose();
@@ -372,19 +441,37 @@ export default function Viewport3D({
       (Array.isArray(axes.material) ? axes.material : [axes.material]).forEach((material) => material?.dispose());
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
+      controls.removeEventListener('start', handleControlStart);
+      controls.removeEventListener('change', handleControlChange);
+      controls.removeEventListener('end', handleControlEnd);
       controls.stopListenToKeyEvents();
       controls.dispose();
+      scheduler.dispose();
+      controlsInteractionRef.current = false;
+      if (invalidateRef.current === scheduler.invalidate) invalidateRef.current = () => false;
       renderer.dispose();
       renderer.domElement.remove();
       scene.clear();
       rendererRef.current = null;
+      controlsRef.current = null;
+      sceneRef.current = null;
+      cameraRef.current = null;
+      perspectiveCameraRef.current = null;
+      orthographicCameraRef.current = null;
+      lightsGroupRef.current = null;
+      gridHelperRef.current = null;
+      axesHelperRef.current = null;
+      delete container.dataset.rendererGeneration;
+      delete container.dataset.renderLoop;
     };
-  // Scene resources deliberately have one lifecycle; refs keep mutable Three.js state current.
+  // A generation is a real WebGL lifecycle; recovery replaces renderer, controls, canvas, and scene.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [rendererGeneration]);
 
   useEffect(() => {
     if (lightsGroupRef.current) setupLighting(lightsGroupRef.current, envPreset);
+  // Lighting mutates the stable Three.js scene held by refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envPreset]);
 
   useEffect(() => {
@@ -404,10 +491,11 @@ export default function Viewport3D({
     nextCamera.lookAt(controls.target);
     controls.update();
     updateCameraEvidence(containerRef.current, nextCamera, controls);
+    invalidateViewport();
   }, [isOrthographic]);
 
   useEffect(() => {
-    if (!sceneRef.current) return undefined;
+    if (!sceneRef.current || !rendererRef.current) return undefined;
     loadAbortRef.current?.abort();
     if (!currentFile?.id) {
       releaseCurrentModel();
@@ -459,7 +547,7 @@ export default function Viewport3D({
         }
         centerAndFitCamera(object);
         applyRenderMode(renderMode);
-        onModelLoaded?.({ object, exportObject, animations: animationsRef.current, stats, metadata });
+        onModelLoaded?.({ modelId: currentFile.id, object, exportObject, animations: animationsRef.current, stats, metadata });
         setLoading(false);
         setLoadProgress(null);
       } catch (loadError) {
@@ -481,9 +569,9 @@ export default function Viewport3D({
       abortController.abort();
       if (loadAbortRef.current === abortController) loadAbortRef.current = null;
     };
-  // Reload only when the opaque model id changes or the user explicitly retries.
+  // Reload on model changes, explicit retries, or a newly recovered WebGL surface.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFile?.id, retryNonce]);
+  }, [currentFile?.id, retryNonce, rendererGeneration]);
 
   useEffect(() => {
     applyRenderMode(renderMode);
@@ -497,6 +585,7 @@ export default function Viewport3D({
       controlsRef.current.autoRotate = autoRotate;
       controlsRef.current.autoRotateSpeed = 1.6;
     }
+    invalidateViewport();
   }, [showGrid, showAxes, autoRotate]);
 
   useEffect(() => {
@@ -519,6 +608,7 @@ export default function Viewport3D({
       activeActionRef.current.paused = !isPlaying;
       if (isPlaying) activeActionRef.current.play();
     }
+    invalidateViewport();
   }, [selectedClipIndex, isPlaying, playbackSpeed, currentFile?.id]);
 
   useEffect(() => {
@@ -528,6 +618,7 @@ export default function Viewport3D({
     action.time = THREE.MathUtils.clamp(seekRequest.value, 0, 1) * duration;
     mixerRef.current?.update(0);
     onAnimationProgress?.(THREE.MathUtils.clamp(seekRequest.value, 0, 1));
+    invalidateViewport();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekRequest]);
 
@@ -546,6 +637,7 @@ export default function Viewport3D({
     camera.lookAt(target);
     controlsRef.current.update();
     updateCameraEvidence(containerRef.current, camera, controlsRef.current);
+    invalidateViewport();
   }, [cameraPresetRequest]);
 
   useEffect(() => {
@@ -553,6 +645,7 @@ export default function Viewport3D({
     const action = typeof cameraControlRequest.action === 'string' ? cameraControlRequest.action : '';
     if (applyCameraAction(cameraRef.current, controlsRef.current, action)) {
       updateCameraEvidence(containerRef.current, cameraRef.current, controlsRef.current);
+      invalidateViewport();
     }
   }, [cameraControlRequest]);
 
@@ -566,6 +659,7 @@ export default function Viewport3D({
     currentModelRef.current.traverse((child) => {
       if (child.uuid === nodeVisibilityToggle.uuid) child.visible = nodeVisibilityToggle.visible;
     });
+    invalidateViewport();
   }, [nodeVisibilityToggle]);
 
   useEffect(() => {
@@ -630,11 +724,13 @@ export default function Viewport3D({
   useEffect(() => {
     const dialog = errorDialogRef.current;
     if (!dialog) return;
-    if (error && !dialog.open) dialog.showModal();
-    if (!error && dialog.open) dialog.close();
-  }, [error]);
+    const visibleError = rendererError || error;
+    if (visibleError && !dialog.open) dialog.showModal();
+    if (!visibleError && dialog.open) dialog.close();
+  }, [error, rendererError]);
 
   const dismissError = () => {
+    if (contextLost) return;
     setError(null);
     onChooseAnotherModel?.();
   };
@@ -660,6 +756,7 @@ export default function Viewport3D({
           const action = `${event.shiftKey ? 'orbit' : 'pan'}-${direction}`;
           if (applyCameraAction(cameraRef.current, controlsRef.current, action)) {
             updateCameraEvidence(containerRef.current, cameraRef.current, controlsRef.current);
+            invalidateViewport();
             event.preventDefault();
           }
         }}
@@ -686,18 +783,26 @@ export default function Viewport3D({
       >
         <div className="flex flex-col items-center p-7">
           <AlertTriangle size={48} aria-hidden="true" className="mb-3 text-red-400" />
-          <h2 id="model-error-title" className="mb-1 text-lg font-bold text-red-100">No se pudo abrir el archivo 3D</h2>
-          <p id="model-error-description" className="max-w-md text-sm text-red-100">{error || 'Error de renderizado.'}</p>
+          <h2 id="model-error-title" className="mb-1 text-lg font-bold text-red-100">
+            {contextLost ? 'No se pudo iniciar la vista 3D' : 'No se pudo abrir el archivo 3D'}
+          </h2>
+          <p id="model-error-description" className="max-w-md text-sm text-red-100">{rendererError || error || 'Error de renderizado.'}</p>
           <div className="mt-5 flex flex-wrap justify-center gap-3">
             <button type="button" autoFocus onClick={() => {
-              setError(null);
-              setRetryNonce((value) => value + 1);
+              if (contextLost) {
+                setRendererGeneration((value) => value + 1);
+              } else {
+                setError(null);
+                setRetryNonce((value) => value + 1);
+              }
             }} className="min-h-10 rounded-lg border border-red-300/60 px-4 py-2 text-sm font-semibold text-white hover:bg-red-900/50">
               {contextLost ? 'Recuperar vista' : 'Reintentar'}
             </button>
-            <button type="button" onClick={dismissError} className="min-h-10 rounded-lg border border-white/30 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10">
-              Elegir otro modelo
-            </button>
+            {!contextLost && (
+              <button type="button" onClick={dismissError} className="min-h-10 rounded-lg border border-white/30 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10">
+                Elegir otro modelo
+              </button>
+            )}
           </div>
         </div>
       </dialog>

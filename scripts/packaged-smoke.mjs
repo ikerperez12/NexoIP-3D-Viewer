@@ -3,11 +3,22 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  assertPackagedFixtureMatrixReport,
+  preparePackagedFixtureMatrix,
+} from './packaged-fixture-matrix.mjs';
 
 const APP_PATH = path.resolve('release', 'win-unpacked', 'NexoIP 3D Viewer.exe');
-const FIXTURE_PATH = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
 const DIAGNOSTICS_DIRECTORY = path.resolve('test-results');
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 180_000;
+const REPORT_EXIT_GRACE_MS = 15_000;
+// A cold Electron executable can spend several seconds in Windows process
+// startup before main.js rejects the unsafe switch. This is still before a
+// BrowserWindow is created; keep the negative smoke assertion bounded without
+// making it flaky on busy or freshly provisioned Windows runners.
+const STARTUP_REJECTION_TIMEOUT_MS = 30_000;
+const FILE_POLL_INTERVAL_MS = 100;
 const REQUIRED_LOCALES = ['en-GB.pak', 'en-US.pak', 'es-419.pak', 'es.pak'];
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -64,40 +75,103 @@ function stopProcessTree(child) {
   }
 }
 
-function waitForExit(child, timeoutMs, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
+function childHasTerminated(child) {
+  return child?.exitCode !== null && child?.exitCode !== undefined
+    || child?.signalCode !== null && child?.signalCode !== undefined;
+}
+
+function createExitResult(child) {
+  return {
+    kind: 'exit',
+    code: child.exitCode,
+    signal: child.signalCode,
+  };
+}
+
+export function observeChildTermination(child) {
+  assert(child && typeof child.once === 'function', 'Packaged process monitor requires a child process.');
+
+  const state = { result: null };
+  let resolveCompletion;
+  const completed = new Promise((resolve) => {
+    resolveCompletion = resolve;
   });
-}
+  let onExit;
+  let onError;
 
-async function pollForFile(filePath, child, label) {
-  const deadline = Date.now() + TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) return;
-    if (child.exitCode !== null) return;
-    await delay(100);
+  const settle = (result) => {
+    if (state.result) return;
+    state.result = result;
+    child.removeListener?.('exit', onExit);
+    child.removeListener?.('error', onError);
+    resolveCompletion(result);
+  };
+
+  onExit = (code, signal) => settle({ kind: 'exit', code, signal });
+  onError = (error) => settle({ kind: 'error', error });
+
+  if (childHasTerminated(child)) {
+    settle(createExitResult(child));
+  } else {
+    child.once('exit', onExit);
+    child.once('error', onError);
+    // A child can exit between the initial state read and listener registration.
+    if (childHasTerminated(child)) {
+      settle(createExitResult(child));
+    }
   }
-  throw new Error(`${label} timed out.`);
+
+  return { completed, state };
 }
 
-function createSelfTestCapability(profileDirectory) {
+export async function waitForObservedTermination(observer, timeoutMs, label) {
+  assert(Number.isFinite(timeoutMs) && timeoutMs >= 0,
+    `${label} received an invalid timeout.`);
+  if (observer.state.result) return observer.state.result;
+
+  let timer;
+  try {
+    return await Promise.race([
+      observer.completed,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function assertSuccessfulExit(termination, label) {
+  if (termination.kind === 'error') {
+    throw new Error(`${label} could not be started: ${termination.error.message}`, {
+      cause: termination.error,
+    });
+  }
+  return termination;
+}
+
+async function pollForFile(filePath, observer, deadline, label) {
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return { available: true };
+    if (observer.state.result) return { available: false, termination: observer.state.result };
+    await delay(Math.min(FILE_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+  }
+  if (fs.existsSync(filePath)) return { available: true };
+  if (observer.state.result) return { available: false, termination: observer.state.result };
+  throw new Error(`${label} timed out after ${TIMEOUT_MS} ms.`);
+}
+
+function createSelfTestCapability(profileDirectory, fixturePaths) {
   const token = randomBytes(32).toString('hex');
   const tokenDigest = createHash('sha256').update(token).digest('hex');
   const nonce = randomBytes(16).toString('hex');
   const configPath = path.join(profileDirectory, `nexoip-packaged-self-test-${nonce}.json`);
   const resultPath = path.join(profileDirectory, `result-${nonce}.json`);
   fs.writeFileSync(configPath, `${JSON.stringify({
-    version: 1,
+    version: 2,
     token,
-    fixturePath: FIXTURE_PATH,
+    fixturePaths,
     resultPath,
   })}\n`, { encoding: 'utf8', mode: 0o600 });
   return { configPath, resultPath, tokenDigest };
@@ -117,9 +191,17 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
   const logs = [];
   child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
   child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
+  const terminationObserver = observeChildTermination(child);
 
   try {
-    const result = await waitForExit(child, 10_000, 'Dangerous startup argument rejection');
+    const result = assertSuccessfulExit(
+      await waitForObservedTermination(
+        terminationObserver,
+        STARTUP_REJECTION_TIMEOUT_MS,
+        'Dangerous startup argument rejection',
+      ),
+      'Dangerous startup argument rejection',
+    );
     assert(result.code === 78, `Unsafe startup argument was not rejected with exit code 78 (got ${result.code}).`);
     assert(logs.join('').includes('Unsafe packaged startup argument rejected'),
       `Unsafe startup rejection did not produce diagnostics: ${logs.join('')}`);
@@ -128,8 +210,8 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
   }
 }
 
-async function runPackagedSelfTest(profileDirectory) {
-  const capability = createSelfTestCapability(profileDirectory);
+async function runPackagedSelfTest(profileDirectory, fixturePaths) {
+  const capability = createSelfTestCapability(profileDirectory, fixturePaths);
   const processLogs = [];
   const child = spawn(APP_PATH, [
     `--nexoip-self-test=${capability.configPath}`,
@@ -144,22 +226,46 @@ async function runPackagedSelfTest(profileDirectory) {
   child.stdout.on('data', (chunk) => processLogs.push(chunk.toString()));
   child.stderr.on('data', (chunk) => processLogs.push(chunk.toString()));
   child.on('exit', (code, signal) => processLogs.push(`\n[process exited: code=${code}, signal=${signal}]\n`));
+  const terminationObserver = observeChildTermination(child);
+  const selfTestStartedAt = Date.now();
+  const selfTestDeadline = selfTestStartedAt + TIMEOUT_MS;
 
   try {
-    await pollForFile(capability.resultPath, child, 'Waiting for packaged self-test result');
-    const result = await waitForExit(child, TIMEOUT_MS, 'Packaged self-test process');
+    const reportAvailability = await pollForFile(
+      capability.resultPath,
+      terminationObserver,
+      selfTestDeadline,
+      'Waiting for packaged self-test result',
+    );
+    if (!reportAvailability.available) {
+      const termination = assertSuccessfulExit(reportAvailability.termination, 'Packaged self-test process');
+      throw new Error(
+        `Packaged self-test process exited before producing a report (code=${termination.code}, signal=${termination.signal}).`,
+      );
+    }
     assert(fs.existsSync(capability.resultPath), 'Packaged self-test did not produce a report.');
 
     const report = JSON.parse(fs.readFileSync(capability.resultPath, 'utf8'));
     assert(report.status === 'passed', `Packaged self-test failed: ${report.error || JSON.stringify(report)}`);
+    const remainingBudgetMs = Math.max(0, selfTestDeadline - Date.now());
+    const exitGraceMs = Math.min(REPORT_EXIT_GRACE_MS, remainingBudgetMs);
+    console.log(
+      `Packaged self-test report passed after ${Date.now() - selfTestStartedAt} ms; awaiting a clean process exit for up to ${exitGraceMs} ms.`,
+    );
+    const result = assertSuccessfulExit(
+      await waitForObservedTermination(terminationObserver, exitGraceMs, 'Packaged self-test process'),
+      'Packaged self-test process',
+    );
     assert(result.code === 0, `Packaged self-test exited with code ${result.code}.`);
     assert(report.checks?.localRenderer?.url === 'nexoip://app/', 'Packaged renderer did not load the local app origin.');
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', 'Packaged renderer title was unexpected.');
-    assert(report.checks?.fixture?.name === path.basename(FIXTURE_PATH), 'Packaged fixture was not registered.');
-    assert(report.checks?.fixture?.bytesRead > 0, 'Packaged fixture was not read through the secure asset handle.');
+    assertPackagedFixtureMatrixReport(report, 'Packaged application');
     assert(report.checks?.preloadContract?.available === true, 'Packaged preload bridge was not available.');
-    assert(report.checks?.preloadContract?.modelBytes === report.checks?.fixture?.size,
-      'Packaged model protocol did not return the complete approved fixture.');
+    assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
+      'Packaged preload contract did not report every format fixture.');
+    assert(Number.isSafeInteger(report.checks?.preloadContract?.totalModelBytes)
+      && report.checks.preloadContract.totalModelBytes > 0,
+    'Packaged model protocol did not return the approved format fixtures.');
     assert(Array.isArray(report.checks?.bundledRuntimes) && report.checks.bundledRuntimes.length === 4,
       'Packaged Draco/Basis runtime report was incomplete.');
     assert(report.checks.bundledRuntimes.every((runtime) => runtime.status === 200 && runtime.bytes > 0),
@@ -187,18 +293,19 @@ async function runPackagedSelfTest(profileDirectory) {
 async function main() {
   assert(process.platform === 'win32', 'This packaged smoke check targets Windows x64.');
   assert(fs.existsSync(APP_PATH), `Missing packaged executable: ${APP_PATH}`);
-  assert(fs.existsSync(FIXTURE_PATH), `Missing model fixture: ${FIXTURE_PATH}`);
-  for (const locale of REQUIRED_LOCALES) {
-    assert(fs.existsSync(path.join(path.dirname(APP_PATH), 'locales', locale)),
-      `Missing packaged locale: ${locale}`);
-  }
-
+  const fixtureMatrix = await preparePackagedFixtureMatrix();
+  const fixturePaths = fixtureMatrix.fixtures.map((fixture) => fixture.fixturePath);
   const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'nexoip-smoke-'));
   try {
+    for (const locale of REQUIRED_LOCALES) {
+      assert(fs.existsSync(path.join(path.dirname(APP_PATH), 'locales', locale)),
+        `Missing packaged locale: ${locale}`);
+    }
     await assertDangerousArgumentsAreRejected(profileDirectory);
-    await runPackagedSelfTest(profileDirectory);
-    console.log('Packaged smoke passed: unsafe flags rejected; local renderer, targeted accessibility/responsive evidence, and fixture self-test passed without CDP.');
+    await runPackagedSelfTest(profileDirectory, fixturePaths);
+    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
   } finally {
+    await fixtureMatrix.cleanup();
     try {
       fs.rmSync(profileDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     } catch {
@@ -207,4 +314,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

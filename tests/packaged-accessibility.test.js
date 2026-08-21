@@ -56,6 +56,19 @@ function createViewportEvidence() {
   };
 }
 
+function createModelLoadEvidence(modelSize) {
+  return {
+    bridgeAvailable: true,
+    modelBytes: modelSize,
+    eventDispatches: 1,
+    exactModelMarker: true,
+    canvas: { present: true, width: 800, height: 600 },
+    webglContext: 'webgl2',
+    contextLost: false,
+    dialogOpened: false,
+  };
+}
+
 test('targeted packaged accessibility evidence accepts the documented responsive and keyboard invariants', () => {
   expect(() => assertPackagedAccessibilityEvidence({
     ...createEvidence(),
@@ -120,21 +133,23 @@ test('packaged self-test records accessibility evidence and restores its viewpor
     getTitle: () => 'NexoIP 3D Viewer',
     getZoomFactor: vi.fn(() => zoomFactor),
     setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
-    executeJavaScript: vi.fn(async () => ({
-      bridgeAvailable: true,
-      modelBytes: fixtureStats.size,
-      bundledRuntimes: [
-        { runtimePath: '/draco/draco_decoder.wasm', status: 200, bytes: 1 },
-        { runtimePath: '/draco/draco_wasm_wrapper.js', status: 200, bytes: 1 },
-        { runtimePath: '/basis/basis_transcoder.js', status: 200, bytes: 1 },
-        { runtimePath: '/basis/basis_transcoder.wasm', status: 200, bytes: 1 },
-      ],
-      accessibility: createEvidence(),
-    })),
+    send: vi.fn(),
+    executeJavaScript: vi.fn(async (source) => (source.includes('data-loaded-model-id')
+      ? createModelLoadEvidence(fixtureStats.size)
+      : {
+          bridgeAvailable: true,
+          bundledRuntimes: [
+            { runtimePath: '/draco/draco_decoder.wasm', status: 200, bytes: 1 },
+            { runtimePath: '/draco/draco_wasm_wrapper.js', status: 200, bytes: 1 },
+            { runtimePath: '/basis/basis_transcoder.js', status: 200, bytes: 1 },
+            { runtimePath: '/basis/basis_transcoder.wasm', status: 200, bytes: 1 },
+          ],
+          accessibility: createEvidence(),
+        })),
   };
 
   const report = await runPackagedSelfTest({
-    config: { fixturePath, resultPath: path.join(process.cwd(), 'test-results', 'result-a11y.json') },
+    config: { fixturePaths: [fixturePath], resultPath: path.join(process.cwd(), 'test-results', 'result-a11y.json') },
     scanner: {
       registerDroppedPath: async () => model,
       openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),
@@ -144,10 +159,20 @@ test('packaged self-test records accessibility evidence and restores its viewpor
   });
 
   expect(report.status).toBe('passed');
+  expect(report.checks.formatMatrix).toHaveLength(1);
+  expect(report.checks.formatMatrix[0]).toMatchObject({
+    name: path.basename(fixturePath),
+    exactModelMarker: true,
+    eventDispatches: 1,
+    dialogOpened: false,
+  });
   expect(report.checks.accessibilityResponsive.viewport.actualWindow).toEqual({ width: 900, height: 600 });
   expect(report.checks.accessibilityResponsive.viewport.actualZoomFactor).toBe(2);
   expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('waitForStableLayout');
   expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('document.fonts?.ready');
+  expect(renderer.executeJavaScript.mock.calls[1][0]).toContain('data-loaded-model-id');
+  expect(renderer.send).toHaveBeenCalledOnce();
+  expect(renderer.send).toHaveBeenCalledWith('nexoip:model-opened', model);
   expect(report.checks.accessibilityResponsive.restoredWindow).toEqual(originalBounds);
   expect(report.checks.accessibilityResponsive.restoredZoomFactor).toBe(1);
   expect(applicationWindow.setSize).toHaveBeenCalledWith(900, 600);
@@ -183,7 +208,7 @@ test('packaged self-test restores its viewport state when the renderer accessibi
   };
 
   const report = await runPackagedSelfTest({
-    config: { fixturePath, resultPath: path.join(process.cwd(), 'test-results', 'result-a11y-rejection.json') },
+    config: { fixturePaths: [fixturePath], resultPath: path.join(process.cwd(), 'test-results', 'result-a11y-rejection.json') },
     scanner: {
       registerDroppedPath: async () => model,
       openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),

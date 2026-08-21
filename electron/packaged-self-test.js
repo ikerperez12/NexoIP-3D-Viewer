@@ -6,8 +6,15 @@ import { isPathInside, isSupportedModelPath } from './security.js';
 
 const MAX_CONFIG_BYTES = 16 * 1024;
 const MAX_ASSET_PROBE_BYTES = 64 * 1024;
+const MAX_FIXTURE_PATHS = 12;
+const MODEL_LOAD_TIMEOUT_MS = 20_000;
 const TEMP_CONFIG_PATTERN = /^nexoip-packaged-self-test-[a-f0-9]+\.json$/;
 const TEMP_RESULT_PATTERN = /^result-[a-f0-9]+\.json$/;
+const TEMP_SCREENSHOT_PATTERN = /^screenshot-[a-f0-9]+\.png$/;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+const MAX_SCREENSHOT_DIMENSION = 8_192;
+const MAX_SCREENSHOT_PIXELS = 16_777_216;
 const ACCESSIBILITY_TEST_WINDOW = Object.freeze({ width: 900, height: 600 });
 const ACCESSIBILITY_TEST_ZOOM_FACTOR = 2;
 const ACCESSIBILITY_EVIDENCE_SCOPE = Object.freeze({
@@ -56,22 +63,54 @@ async function canonicalTemporaryConfigPath(configPath) {
 }
 
 async function validateConfig(config, configPath, expectedDigest) {
+  const hasScreenshotPath = Object.hasOwn(config || {}, 'screenshotPath');
   if (!isPlainObject(config)
-    || config.version !== 1
+    || config.version !== 2
     || typeof config.token !== 'string'
     || !/^[a-f0-9]{64}$/i.test(config.token)
-    || typeof config.fixturePath !== 'string'
+    || !Array.isArray(config.fixturePaths)
+    || config.fixturePaths.length === 0
+    || config.fixturePaths.length > MAX_FIXTURE_PATHS
+    || config.fixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
     || typeof config.resultPath !== 'string'
-    || !path.isAbsolute(config.fixturePath)
     || !path.isAbsolute(config.resultPath)
-    || !isSupportedModelPath(config.fixturePath)
-    || !TEMP_RESULT_PATTERN.test(path.basename(config.resultPath))) {
+    || !TEMP_RESULT_PATTERN.test(path.basename(config.resultPath))
+    || (hasScreenshotPath && (typeof config.screenshotPath !== 'string'
+      || !path.isAbsolute(config.screenshotPath)
+      || !TEMP_SCREENSHOT_PATTERN.test(path.basename(config.screenshotPath))
+      || hasPathTraversalSegment(config.screenshotPath)))
+    || typeof expectedDigest !== 'string'
+    || !/^[a-f0-9]{64}$/i.test(expectedDigest)) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
-  const configDirectory = await fs.promises.realpath(path.dirname(configPath));
-  const resultDirectory = await fs.promises.realpath(path.dirname(config.resultPath));
-  if (path.relative(configDirectory, resultDirectory) !== '') {
+  let configDirectory;
+  let resultDirectory;
+  let screenshotDirectory;
+  let fixturePaths;
+  try {
+    [configDirectory, resultDirectory, fixturePaths] = await Promise.all([
+      fs.promises.realpath(path.dirname(configPath)),
+      fs.promises.realpath(path.dirname(config.resultPath)),
+      Promise.all(config.fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+    ]);
+    if (hasScreenshotPath) {
+      screenshotDirectory = await fs.promises.realpath(path.dirname(config.screenshotPath));
+    }
+  } catch {
+    throw new Error('The packaged self-test configuration is invalid.');
+  }
+  if (path.relative(configDirectory, resultDirectory) !== ''
+    || (hasScreenshotPath && path.relative(configDirectory, screenshotDirectory) !== '')) {
+    throw new Error('The packaged self-test configuration is invalid.');
+  }
+
+  const uniqueFixturePaths = new Set(fixturePaths.map((fixturePath) => (
+    process.platform === 'win32' ? fixturePath.toLowerCase() : fixturePath
+  )));
+  if (uniqueFixturePaths.size !== fixturePaths.length) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
@@ -82,8 +121,101 @@ async function validateConfig(config, configPath, expectedDigest) {
   }
 
   return {
-    fixturePath: path.resolve(config.fixturePath),
+    fixturePaths,
     resultPath: path.join(resultDirectory, path.basename(config.resultPath)),
+    screenshotPath: hasScreenshotPath
+      ? path.join(screenshotDirectory, path.basename(config.screenshotPath))
+      : undefined,
+  };
+}
+
+function hasPathTraversalSegment(filePath) {
+  const root = path.parse(filePath).root;
+  return filePath.slice(root.length).split(/[\\/]+/).some((segment) => segment === '.' || segment === '..');
+}
+
+function assertCapturedPng(nativeImage) {
+  if (!nativeImage
+    || typeof nativeImage.isEmpty !== 'function'
+    || typeof nativeImage.getSize !== 'function'
+    || typeof nativeImage.toPNG !== 'function') {
+    throw new Error('The packaged self-test screenshot capture is unavailable.');
+  }
+
+  let empty;
+  let size;
+  let png;
+  try {
+    empty = nativeImage.isEmpty();
+    size = nativeImage.getSize();
+    png = nativeImage.toPNG();
+  } catch {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+  if (empty !== false) {
+    throw new Error('The packaged self-test screenshot capture is empty.');
+  }
+  if (!size
+    || !Number.isSafeInteger(size.width)
+    || !Number.isSafeInteger(size.height)
+    || size.width <= 0
+    || size.height <= 0
+    || size.width > MAX_SCREENSHOT_DIMENSION
+    || size.height > MAX_SCREENSHOT_DIMENSION
+    || size.width * size.height > MAX_SCREENSHOT_PIXELS
+    || (!Buffer.isBuffer(png) && !ArrayBuffer.isView(png))) {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+
+  const bytes = Buffer.from(png);
+  if (bytes.length < PNG_SIGNATURE.length
+    || bytes.length > MAX_SCREENSHOT_BYTES
+    || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+  return { bytes, width: size.width, height: size.height };
+}
+
+async function writeCapturedPng(screenshotPath, bytes) {
+  const directory = path.dirname(screenshotPath);
+  const filename = path.basename(screenshotPath);
+  if (!TEMP_SCREENSHOT_PATTERN.test(filename)
+    || path.join(directory, filename) !== screenshotPath) {
+    throw new Error('The packaged self-test screenshot path is invalid.');
+  }
+
+  const temporaryPath = path.join(directory, `.${filename}.${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    await fs.promises.writeFile(temporaryPath, bytes, { mode: 0o600, flag: 'wx' });
+    await fs.promises.rename(temporaryPath, screenshotPath);
+  } catch (error) {
+    await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function capturePackagedSelfTestScreenshot(renderer, screenshotPath) {
+  if (typeof renderer?.capturePage !== 'function') {
+    throw new Error('The packaged self-test screenshot capture is unavailable.');
+  }
+
+  let nativeImage;
+  try {
+    nativeImage = await renderer.capturePage();
+  } catch {
+    throw new Error('The packaged self-test screenshot capture failed.');
+  }
+  const capture = assertCapturedPng(nativeImage);
+  try {
+    await writeCapturedPng(screenshotPath, capture.bytes);
+  } catch {
+    throw new Error('The packaged self-test screenshot capture could not be written.');
+  }
+  return {
+    filename: path.basename(screenshotPath),
+    width: capture.width,
+    height: capture.height,
+    bytes: capture.bytes.length,
   };
 }
 
@@ -100,6 +232,223 @@ async function readAssetPrefix(stream) {
     }
   }
   return Buffer.concat(chunks, total);
+}
+
+function sanitizeRendererDiagnostic(value) {
+  return String(value || '')
+    .replace(/(?:https?|nexoip|blob|file):[^\s"'<>]+/gi, '[url]')
+    .replace(/[a-z]:[\\/][^\s"'<>]+/gi, '[local-path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+async function probeRendererModelLoad(renderer, model, expectedSize, { prepareScreenshotFrame = false } = {}) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot dispatch and observe a real model load.');
+  }
+
+  const consoleDiagnostics = [];
+  const handleConsoleMessage = (...args) => {
+    const message = typeof args[0]?.message === 'string' ? args[0].message : args[2];
+    const sanitized = sanitizeRendererDiagnostic(message);
+    if (sanitized && !consoleDiagnostics.includes(sanitized)) {
+      consoleDiagnostics.push(sanitized);
+      if (consoleDiagnostics.length > 4) consoleDiagnostics.shift();
+    }
+  };
+  renderer.on?.('console-message', handleConsoleMessage);
+
+  let result;
+  try {
+    renderer.send('nexoip:model-opened', model);
+    result = await renderer.executeJavaScript(`(async () => {
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const expectedSize = ${JSON.stringify(expectedSize)};
+    const timeoutMs = ${MODEL_LOAD_TIMEOUT_MS};
+    const prepareScreenshotFrame = ${JSON.stringify(prepareScreenshotFrame)};
+    const bridgeAvailable = Boolean(window.nexoip)
+      && typeof window.nexoip.getCatalogPage === 'function'
+      && typeof window.nexoip.getModelUrl === 'function';
+    if (!bridgeAvailable) throw new Error('The packaged preload bridge is unavailable during a model load.');
+
+    const catalogPage = await window.nexoip.getCatalogPage({
+      filters: { query: ${JSON.stringify(model.name)}, sortBy: 'name', order: 'asc' },
+      limit: 100,
+    });
+    const model = Array.isArray(catalogPage?.items)
+      ? catalogPage.items.find((item) => item.id === expectedModelId)
+      : null;
+    if (!model) throw new Error('The registered model is missing from the packaged library.');
+
+    const modelResponse = await fetch(window.nexoip.getModelUrl(expectedModelId), { cache: 'no-store' });
+    const modelBytes = modelResponse.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
+    if (modelBytes !== expectedSize) {
+      throw new Error('The private model protocol did not return the complete approved model.');
+    }
+
+    const deadline = performance.now() + timeoutMs;
+    let dialogOpened = false;
+    while (performance.now() < deadline) {
+      const openDialog = document.querySelector('dialog[open]');
+      if (openDialog) {
+        dialogOpened = true;
+        break;
+      }
+
+      const main = document.querySelector('main');
+      if (main?.getAttribute('data-loaded-model-id') === expectedModelId) {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (document.querySelector('dialog[open]')) {
+          throw new Error('The packaged renderer opened an error dialog after publishing its loaded-model marker.');
+        }
+        if (document.querySelector('main')?.getAttribute('data-loaded-model-id') !== expectedModelId) {
+          throw new Error('The packaged renderer changed its loaded-model marker before the scene settled.');
+        }
+        const transientLoadStatusVisible = Array.from(document.querySelectorAll('[role="status"]'))
+          .some((element) => element.textContent?.includes('Cargando'));
+        if (transientLoadStatusVisible) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          continue;
+        }
+        let screenshotFrame;
+        if (prepareScreenshotFrame) {
+          const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const getAction = (label) => Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === label);
+          if (document.querySelector('aside[aria-label="Biblioteca de modelos locales"]')) {
+            const closeLibrary = getAction('Cerrar biblioteca de modelos') || getAction('Cerrar biblioteca');
+            if (!(closeLibrary instanceof HTMLButtonElement)) {
+              throw new Error('The packaged screenshot frame could not close the normal library panel.');
+            }
+            closeLibrary.click();
+          }
+          if (!document.querySelector('aside[aria-label="Propiedades del modelo"]')) {
+            const openInspector = getAction('Abrir propiedades del modelo');
+            if (!(openInspector instanceof HTMLButtonElement)) {
+              throw new Error('The packaged screenshot frame could not open the normal properties panel.');
+            }
+            openInspector.click();
+          }
+          await nextFrame();
+          if (document.querySelector('aside[aria-label="Biblioteca de modelos locales"]')
+            || !document.querySelector('aside[aria-label="Propiedades del modelo"]')) {
+            throw new Error('The packaged screenshot frame did not settle in its clean visual state.');
+          }
+          screenshotFrame = { libraryClosed: true, inspectorVisible: true };
+        }
+        const canvas = document.querySelector('[data-viewport-controls] canvas');
+        let context = null;
+        let webglContext = null;
+        if (canvas instanceof HTMLCanvasElement) {
+          try {
+            context = canvas.getContext('webgl2');
+            webglContext = context ? 'webgl2' : null;
+            if (!context) {
+              context = canvas.getContext('webgl');
+              webglContext = context ? 'webgl' : null;
+            }
+          } catch {
+            context = null;
+          }
+        }
+        const contextLost = typeof context?.isContextLost === 'function' ? context.isContextLost() : true;
+        return {
+          bridgeAvailable,
+          modelBytes,
+          eventDispatches: 1,
+          exactModelMarker: true,
+          canvas: {
+            present: canvas instanceof HTMLCanvasElement,
+            width: canvas instanceof HTMLCanvasElement ? canvas.width : 0,
+            height: canvas instanceof HTMLCanvasElement ? canvas.height : 0,
+          },
+          webglContext,
+          contextLost,
+          dialogOpened,
+          screenshotFrame,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (dialogOpened) throw new Error('The packaged renderer opened an error dialog while loading a format fixture.');
+    const probeWorkerRuntime = async () => {
+      let worker;
+      let workerUrl;
+      try {
+        const source = [
+          'self.onmessage = async () => {',
+          '  try {',
+          '    await WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0]));',
+          '    let dynamicCode = "blocked";',
+          '    try { dynamicCode = new Function("return 1")() === 1 ? "ok" : "unexpected"; } catch (_) {}',
+          '    self.postMessage({ status: "ok", dynamicCode });',
+          '  } catch (error) {',
+          '    self.postMessage({ status: "error", name: error && error.name ? error.name : "Error" });',
+          '  }',
+          '};'
+        ].join('\\n');
+        workerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        worker = new Worker(workerUrl);
+        return await Promise.race([
+          new Promise((resolve) => {
+            worker.onmessage = (event) => resolve(event.data?.status === 'ok'
+              ? 'wasm:ok,dynamic:' + (event.data?.dynamicCode || 'unknown')
+              : 'error:' + (event.data?.name || 'Error'));
+            worker.onerror = (event) => {
+              event.preventDefault();
+              resolve('error:WorkerError');
+            };
+            worker.postMessage(null);
+          }),
+          new Promise((resolve) => setTimeout(() => resolve('timeout'), 1_000))
+        ]);
+      } catch (error) {
+        return 'error:' + (error && error.name ? error.name : 'Error');
+      } finally {
+        worker?.terminate();
+        if (workerUrl) URL.revokeObjectURL(workerUrl);
+      }
+    };
+    const workerRuntime = await probeWorkerRuntime();
+    const observedMarker = document.querySelector('main')?.getAttribute('data-loaded-model-id');
+    const loadingIndicator = Array.from(document.querySelectorAll('[role="status"]'))
+      .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+    const selectedModel = Boolean(document.querySelector('button[aria-current="true"]'));
+    const canvasPresent = document.querySelector('[data-viewport-controls] canvas') instanceof HTMLCanvasElement;
+    throw new Error(
+      'The packaged renderer timed out before publishing the exact loaded-model marker '
+      + '(selected=' + selectedModel
+      + ', loading=' + loadingIndicator
+      + ', canvas=' + canvasPresent
+      + ', workerWasm=' + workerRuntime
+      + ', marker=' + (observedMarker ? 'different' : 'missing') + ').'
+    );
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    const consoleSummary = consoleDiagnostics.length > 0
+      ? ` Renderer console: ${consoleDiagnostics.join(' | ')}`
+      : '';
+    throw new Error(`${message || 'The packaged renderer probe failed.'}${consoleSummary}`, { cause: error });
+  } finally {
+    renderer.off?.('console-message', handleConsoleMessage);
+  }
+
+  const valid = result?.bridgeAvailable === true
+    && result.modelBytes === expectedSize
+    && result.eventDispatches === 1
+    && result.exactModelMarker === true
+    && result.canvas?.present === true
+    && Number.isSafeInteger(result.canvas.width) && result.canvas.width > 0
+    && Number.isSafeInteger(result.canvas.height) && result.canvas.height > 0
+    && (result.webglContext === 'webgl2' || result.webglContext === 'webgl')
+    && result.contextLost === false
+    && result.dialogOpened === false;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete evidence for a real model load.');
+  }
+  return result;
 }
 
 function isFiniteNumber(value) {
@@ -233,24 +582,18 @@ export async function loadPackagedSelfTestConfig(request) {
 export async function runPackagedSelfTest({ scanner, config, renderer, window: applicationWindow }) {
   const startedAt = new Date().toISOString();
   const report = {
-    version: 1,
+    version: 2,
     status: 'failed',
     startedAt,
     checks: {},
   };
 
   try {
-    const fixtureStats = await fs.promises.stat(config.fixturePath);
-    if (!fixtureStats.isFile() || fixtureStats.size === 0) {
-      throw new Error('The packaged self-test fixture is missing or empty.');
+    if (!Array.isArray(config?.fixturePaths)
+      || config.fixturePaths.length === 0
+      || config.fixturePaths.length > MAX_FIXTURE_PATHS) {
+      throw new Error('The packaged self-test fixture matrix is invalid.');
     }
-
-    const model = await scanner.registerDroppedPath(config.fixturePath);
-    const asset = await scanner.openModelAsset(model.id, 'asset');
-    if (!asset) throw new Error('The packaged self-test fixture could not be opened securely.');
-
-    const prefix = await readAssetPrefix(asset.stream);
-    if (prefix.length === 0) throw new Error('The packaged self-test fixture could not be read.');
 
     const rendererUrl = renderer.getURL();
     const rendererTitle = renderer.getTitle();
@@ -263,16 +606,11 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     let restoredAccessibilityViewport;
     try {
       rendererChecks = await renderer.executeJavaScript(`(async () => {
-      const bridgeMethods = ['listModels', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
+      const bridgeMethods = ['getCatalogPage', 'getTreeChildren', 'getCatalogNeighbor', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
       const bridgeAvailable = Boolean(window.nexoip)
         && bridgeMethods.every((method) => typeof window.nexoip[method] === 'function');
       if (!bridgeAvailable) return { bridgeAvailable: false };
 
-      const models = await window.nexoip.listModels({ sortBy: 'name', order: 'asc' });
-      const model = models.find((item) => item.id === ${JSON.stringify(model.id)});
-      const modelUrl = model ? window.nexoip.getModelUrl(model.id) : null;
-      const modelResponse = modelUrl ? await fetch(modelUrl, { cache: 'no-store' }) : null;
-      const modelBytes = modelResponse?.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
       const runtimePaths = [
         '/draco/draco_decoder.wasm',
         '/draco/draco_wasm_wrapper.js',
@@ -484,7 +822,6 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
 
         return {
           bridgeAvailable,
-          modelBytes,
           bundledRuntimes,
           accessibility: {
             scope: ${JSON.stringify(ACCESSIBILITY_EVIDENCE_SCOPE)},
@@ -532,8 +869,8 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     } finally {
       restoredAccessibilityViewport = await restoreAccessibilityTestViewport(applicationWindow, renderer, accessibilityViewport);
     }
-    if (!rendererChecks.bridgeAvailable || rendererChecks.modelBytes !== fixtureStats.size) {
-      throw new Error('The packaged preload bridge or private model protocol did not return the approved fixture.');
+    if (!rendererChecks.bridgeAvailable) {
+      throw new Error('The packaged preload bridge was not available.');
     }
     if (rendererChecks.bundledRuntimes.some((runtime) => runtime.status !== 200 || runtime.bytes === 0)) {
       throw new Error('A bundled Draco or Basis runtime was not available from the packaged application origin.');
@@ -544,23 +881,89 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       restoredWindow: restoredAccessibilityViewport.window,
       restoredZoomFactor: restoredAccessibilityViewport.zoomFactor,
     };
+    assertPackagedAccessibilityEvidence(accessibilityResponsive);
+
+    const formatMatrix = [];
+    let totalModelBytes = 0;
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
-      fixture: {
-        id: model.id,
-        name: model.name,
-        size: model.size,
-        bytesRead: prefix.length,
-      },
+      formatMatrix,
       preloadContract: {
         available: true,
-        modelBytes: rendererChecks.modelBytes,
+        modelCount: 0,
+        totalModelBytes: 0,
         noDebuggingTransport: true,
       },
       bundledRuntimes: rendererChecks.bundledRuntimes,
       accessibilityResponsive,
     };
-    assertPackagedAccessibilityEvidence(accessibilityResponsive);
+    for (let fixtureIndex = 0; fixtureIndex < config.fixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = config.fixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let model;
+      try {
+        model = await scanner.registerDroppedPath(fixturePath);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be registered securely.`);
+      }
+      let asset;
+      try {
+        asset = await scanner.openModelAsset(model.id, 'asset');
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be opened securely.`);
+      }
+      if (!asset) throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be opened securely.`);
+
+      let prefix;
+      try {
+        prefix = await readAssetPrefix(asset.stream);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be read securely.`);
+      }
+      if (prefix.length === 0) throw new Error(`Packaged format fixture ${fixtureIndex + 1} is empty.`);
+
+      const shouldCaptureScreenshot = Boolean(config.screenshotPath && fixtureIndex === config.fixturePaths.length - 1);
+      let modelLoad;
+      try {
+        modelLoad = await probeRendererModelLoad(renderer, model, fixtureStats.size, {
+          prepareScreenshotFrame: shouldCaptureScreenshot,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const safeDetail = /^(The packaged|The private|The registered)/.test(message)
+          ? message
+          : 'The renderer probe failed without safe diagnostics.';
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`, { cause: error });
+      }
+      totalModelBytes += modelLoad.modelBytes;
+      formatMatrix.push({
+        name: model.name,
+        extension: path.extname(model.name).slice(1).toLowerCase(),
+        size: model.size,
+        bytesRead: prefix.length,
+        modelBytes: modelLoad.modelBytes,
+        eventDispatches: modelLoad.eventDispatches,
+        exactModelMarker: modelLoad.exactModelMarker,
+        canvas: modelLoad.canvas,
+        webglContext: modelLoad.webglContext,
+        contextLost: modelLoad.contextLost,
+        dialogOpened: modelLoad.dialogOpened,
+      });
+      if (shouldCaptureScreenshot) {
+        report.checks.screenshot = await capturePackagedSelfTestScreenshot(renderer, config.screenshotPath);
+      }
+      report.checks.preloadContract.modelCount = formatMatrix.length;
+      report.checks.preloadContract.totalModelBytes = totalModelBytes;
+    }
     report.status = 'passed';
   } catch (error) {
     report.error = error instanceof Error ? error.message : String(error);

@@ -1,23 +1,46 @@
 const UNSAFE_PACKAGED_SWITCHES = new Set([
+  'allow-file-access-from-files',
   'allow-insecure-localhost',
   'allow-running-insecure-content',
+  'allow-universal-access-from-files',
+  'disable-blink-features',
+  'disable-field-trial-config',
+  'disable-features',
+  'disable-gpu-driver-bug-workarounds',
   'disable-gpu-sandbox',
+  'disable-namespace-sandbox',
   'disable-sandbox',
+  'disable-seccomp-filter-sandbox',
+  'disable-setuid-sandbox',
+  'disable-site-isolation-for-policy',
   'disable-site-isolation-trials',
   'disable-web-security',
+  'enable-blink-features',
+  'enable-experimental-web-platform-features',
+  'enable-features',
   'ignore-certificate-errors',
+  'ignore-certificate-errors-spki-list',
   'in-process-gpu',
+  'js-flags',
+  'load-extension',
   'no-sandbox',
+  'no-zygote',
+  'node-options',
   'remote-debugging-address',
   'remote-debugging-pipe',
   'remote-debugging-port',
   'single-process',
+  'unsafely-treat-insecure-origin-as-secure',
 ]);
 
 const UNSAFE_PACKAGED_SWITCH_PREFIXES = [
   'inspect',
   'debug',
+  'force-fieldtrial',
+  'force-variation-',
+  'origin-trial-',
   'remote-debugging-',
+  'variations-',
 ];
 
 const SELF_TEST_SWITCH = 'nexoip-self-test';
@@ -25,15 +48,19 @@ const SELF_TEST_DIGEST_SWITCH = 'nexoip-self-test-token-sha256';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 function getSwitchName(argument) {
-  if (typeof argument !== 'string' || !argument.startsWith('--')) return null;
-  const rawName = argument.slice(2).split('=', 1)[0].trim().toLowerCase();
-  return rawName || null;
-}
+  if (typeof argument !== 'string') return null;
 
-function hasUnsafeNodeInspectorValue(argument) {
-  const [name, value = ''] = argument.slice(2).split(/=(.*)/s, 2);
-  if (name.toLowerCase() !== 'js-flags' && name.toLowerCase() !== 'node-options') return false;
-  return /(?:^|\s)--(?:inspect|inspect-brk|debug|debug-brk)(?:[=\s]|$)/i.test(value);
+  let prefixLength;
+  if (argument.startsWith('--')) {
+    prefixLength = 2;
+  } else if (argument.startsWith('-') || argument.startsWith('/')) {
+    prefixLength = 1;
+  } else {
+    return null;
+  }
+
+  const rawName = argument.slice(prefixLength).split(/[=:]/, 1)[0].trim().toLowerCase();
+  return rawName || null;
 }
 
 export function findUnsafePackagedArguments(argumentsList) {
@@ -44,8 +71,7 @@ export function findUnsafePackagedArguments(argumentsList) {
     if (!name) return false;
 
     return UNSAFE_PACKAGED_SWITCHES.has(name)
-      || UNSAFE_PACKAGED_SWITCH_PREFIXES.some((prefix) => name === prefix || name.startsWith(prefix))
-      || hasUnsafeNodeInspectorValue(argument);
+      || UNSAFE_PACKAGED_SWITCH_PREFIXES.some((prefix) => name === prefix || name.startsWith(prefix));
   });
 }
 

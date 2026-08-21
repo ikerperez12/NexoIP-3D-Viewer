@@ -16,7 +16,7 @@ NexoIP 3D Viewer es una aplicación de escritorio privada y offline-first para b
 - Inspector de geometría, dimensiones, jerarquía, materiales y animaciones.
 - Selector, reproducción, avance manual y velocidad de animaciones funcionales.
 - Exportación a GLB, STL y OBJ, además de capturas PNG.
-- Fuentes y decodificador Draco incluidos: no depende de Google Fonts, Tailwind CDN ni gstatic.
+- Fuentes y decodificadores Draco y Basis incluidos: no depende de Google Fonts, Tailwind CDN ni gstatic.
 - Navegación por teclado, foco visible, etiquetas accesibles y reducción de movimiento.
 
 ## Descargar
@@ -29,7 +29,7 @@ La compilación existente está en la [vista previa alpha `v1.0.0`](https://gith
 - `*.cdx.json`: inventario CycloneDX de dependencias.
 - `THIRD_PARTY_NOTICES.txt`: licencias y atribuciones de los componentes incluidos.
 
-Los binarios actuales no tienen firma Authenticode y Windows puede mostrar SmartScreen. Comprueba siempre el SHA-256 antes de ejecutarlos:
+Los binarios actuales no tienen firma Authenticode y Windows puede mostrar SmartScreen. Comprueba siempre el SHA-256 antes de ejecutarlos. La [guía completa de verificación](RELEASE_VERIFICATION.md) explica cómo comprobar una alpha y, cuando exista, una release estable firmada:
 
 ```powershell
 Get-FileHash .\NexoIP-3D-Viewer-1.0.0-windows-x64-portable.exe -Algorithm SHA256
@@ -38,7 +38,7 @@ Get-Content .\SHA256SUMS.txt
 
 ## Privacidad real
 
-La aplicación no incluye telemetría, cuentas, analítica, comprobaciones remotas ni servidor HTTP. Tampoco escanea automáticamente el equipo. Un diálogo nativo permite seleccionar las carpetas que quieres indexar y arrastrar un archivo autoriza únicamente ese modelo.
+La aplicación no incluye telemetría, cuentas, analítica, comprobaciones remotas ni servidor HTTP. Tampoco escanea automáticamente el equipo. Un diálogo nativo permite seleccionar las carpetas que quieres indexar y arrastrar un archivo autoriza únicamente ese modelo. El descubrimiento es progresivo: los modelos compatibles que superan una precomprobación estructural acotada se incorporan a la biblioteca mientras el escaneo sigue activo. La carga completa vuelve a analizar el modelo y sus recursos al abrirlo. La interfaz recibe páginas acotadas y revisadas del catálogo y abre cada carpeta del árbol bajo demanda, sin copiar la biblioteca entera en cada actualización. No hay un tope arbitrario de profundidad, entradas o modelos en las carpetas elegidas; se conservan las defensas de ruta canónica, archivo regular, tamaño por archivo y precomprobación estructural.
 
 La interfaz se ejecuta aislada y sin acceso a Node.js ni a rutas del sistema. El proceso principal valida todas las operaciones, devuelve identificadores opacos y solo sirve modelos ya autorizados. Se bloquean navegación externa, ventanas emergentes, permisos y `webview`.
 
@@ -65,9 +65,9 @@ npm run test:release-artifacts
 
 `npm run test:release-artifacts` se niega a ejecutarse si detecta una instalación previa de NexoIP, instala NSIS de forma silenciosa en directorios temporales únicos dentro del perfil anfitrión protegido, ejecuta el contrato seguro, elimina el estado que ha creado y valida el portable. No sustituye una prueba posterior sobre perfiles Windows limpios.
 
-`npm run test:e2e` y `npm run test:smoke:ci` comprueban todos los fuses de Electron, demuestran que el ejecutable distribuido rechaza transportes de depuración, inician el paquete real sin CDP, ejercitan el bridge preload y el protocolo privado de modelos `nexoip://`, y verifican los cuatro runtimes Draco/Basis incluidos. El self-test empaquetado recoge además evidencia dirigida con ventana 900x600 y zoom del navegador al 200%: acciones esenciales visibles, ausencia de desbordamiento global y alternativas de cámara por teclado. Es una regresión concreta, no una declaración de conformidad WCAG.
+`npm run test:e2e` y `npm run test:smoke:ci` comprueban todos los fuses de Electron, demuestran que el ejecutable distribuido rechaza transportes de depuración, inician el paquete real sin CDP, ejercitan el bridge preload y el protocolo privado de modelos `nexoip://`, y cargan diez escenarios reales: todos los formatos anunciados, Draco, Meshopt y KTX2/Basis. También verifican los cuatro runtimes Draco/Basis incluidos. El self-test empaquetado recoge además evidencia dirigida con ventana 900x600 y zoom del navegador al 200%: acciones esenciales visibles, ausencia de desbordamiento global y alternativas de cámara por teclado. Es una regresión concreta, no una declaración de conformidad WCAG.
 
-Las pruebas unitarias usan un corpus redistribuible fijado por SHA-256 para glTF con recursos externos, `EXT_meshopt_compression` obligatorio, OBJ con varias bibliotecas MTL y texturas, DAE con escala/ejes/textura/animación, FBX estático, cableado Draco/KTX2, STL y PLY. La procedencia de cada fixture está documentada junto al corpus; la decodificación Draco/KTX2 dentro del paquete real y la matriz completa de siete formatos siguen pendientes para la versión estable.
+Las pruebas unitarias usan un corpus redistribuible fijado por SHA-256 para GLB animado, glTF con recursos externos, `EXT_meshopt_compression`, Draco y KTX2/Basis obligatorios, OBJ con varias bibliotecas MTL y texturas, DAE con escala/ejes/textura/animación, FBX estático, STL y PLY. La matriz empaquetada carga diez escenarios reales que cubren los siete formatos; la procedencia de cada fixture está documentada junto al corpus. Esto no afirma fidelidad completa para todas las variantes de cada formato.
 
 Los binarios se generan en `release/`, pero no se versionan en Git. Las distribuciones oficiales se publican únicamente como assets de una GitHub Release.
 
@@ -75,7 +75,7 @@ Los binarios se generan en `release/`, pero no se versionan en Git. Las distribu
 
 - Solo se distribuye oficialmente para Windows x64.
 - `v1.0.0` es una vista previa alpha; todavía no existe una release estable soportada.
-- La matriz unitaria ya cubre FBX estático, DAE animado/texturizado, Meshopt real y OBJ multi-MTL con texturas; la matriz completa dentro de la aplicación empaquetada, incluida decodificación Draco/KTX2, sigue pendiente.
+- La matriz empaquetada cubre los siete formatos y la decodificación Draco/Meshopt/KTX2 en escenarios representativos; siguen pendientes corpus más amplios, ficheros malformados por cada formato y garantías de fidelidad completa.
 - Los recursos vinculados que admita cada cargador deben estar junto al modelo aprobado y usar una extensión auxiliar permitida.
 - Las dimensiones se muestran en unidades propias del modelo (`u`), porque los formatos de origen no siempre definen una escala real.
 - Un archivo excesivamente grande o malformado puede rechazarse para proteger memoria y estabilidad.

@@ -29,7 +29,7 @@ The React renderer has `nodeIntegration: false`, `contextIsolation: true`, and `
 
 ### Main process and registry
 
-`electron/file-scanner.js` indexes only user-approved directories or explicitly dropped files. Supported model formats and sidecar extensions are allowlisted. Directory depth, item count, file size, symlink containment, and resolved paths are checked. Renderer DTOs contain opaque IDs and display metadata, not absolute paths.
+`electron/file-scanner.js` indexes only user-approved directories or explicitly dropped files. Supported model formats and sidecar extensions are allowlisted. Selected roots have no arbitrary depth, directory, entry, or model-count cap: discovery remains cancellable and progressive instead. Every candidate is constrained to the approved canonical root, must be a regular non-link file within the per-file size policy, and must pass a bounded format-specific structural preflight before it enters the catalog. Renderer DTOs contain opaque IDs and display metadata, not absolute paths. The first prechecked discovery publishes immediately; later dense discoveries coalesce into metadata-only notifications no more often than every 200 ms, with a final state notification at scan completion. The renderer then reads revisioned, cursor-paginated catalog and tree-child snapshots, never a full library transfer. Opening a catalog entry still performs the format loader's full parse and fidelity checks.
 
 ### Asset protocol
 

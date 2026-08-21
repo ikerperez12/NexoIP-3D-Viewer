@@ -4,6 +4,11 @@ All notable changes are documented here. This project follows [Semantic Versioni
 
 ## [Unreleased]
 
+### Added
+
+- Folder discovery now publishes compatible models progressively through bounded, revisioned catalog pages and lazy tree nodes, without global folder-depth, entry, or model-count caps.
+- Added a reproducible release-verification guide for checksums, stable publisher identity, trusted timestamps, and GitHub provenance.
+
 ### Changed
 
 - Added decoded-resource budgets, cancellable scans and loads, adaptive camera clipping, recoverable WebGL context loss, and deterministic GPU resource disposal.
@@ -15,7 +20,7 @@ All notable changes are documented here. This project follows [Semantic Versioni
 
 - Production binaries reject debugging and sandbox-bypass startup flags before creating a window.
 - Model assets are served from identity-verified open handles with safe MIME types and no check-then-reopen race.
-- Release publication now requires protected-main provenance, manual `production-signing` approval, timestamped publisher signatures, an Electron runtime inventory, SBOM, checksums, and attestations.
+- Release publication now requires protected-main provenance, manual `production-signing` approval, timestamped publisher signatures, an Electron runtime inventory, SBOM, checksums, and attestations. Attestation uses a least-privilege job separate from publication, and a draft is downloaded and hash-verified before it can be made public.
 - Stable publication rejects prerelease version strings and any tag that already owns a GitHub Release; high-risk runtime and toolchain upgrades are kept out of grouped Dependabot updates.
 
 ### Tests
