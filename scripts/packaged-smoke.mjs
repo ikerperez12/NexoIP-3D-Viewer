@@ -3,11 +3,14 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  assertPackagedFixtureMatrixReport,
+  preparePackagedFixtureMatrix,
+} from './packaged-fixture-matrix.mjs';
 
 const APP_PATH = path.resolve('release', 'win-unpacked', 'NexoIP 3D Viewer.exe');
-const FIXTURE_PATH = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
 const DIAGNOSTICS_DIRECTORY = path.resolve('test-results');
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 180_000;
 const REQUIRED_LOCALES = ['en-GB.pak', 'en-US.pak', 'es-419.pak', 'es.pak'];
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -88,16 +91,16 @@ async function pollForFile(filePath, child, label) {
   throw new Error(`${label} timed out.`);
 }
 
-function createSelfTestCapability(profileDirectory) {
+function createSelfTestCapability(profileDirectory, fixturePaths) {
   const token = randomBytes(32).toString('hex');
   const tokenDigest = createHash('sha256').update(token).digest('hex');
   const nonce = randomBytes(16).toString('hex');
   const configPath = path.join(profileDirectory, `nexoip-packaged-self-test-${nonce}.json`);
   const resultPath = path.join(profileDirectory, `result-${nonce}.json`);
   fs.writeFileSync(configPath, `${JSON.stringify({
-    version: 1,
+    version: 2,
     token,
-    fixturePath: FIXTURE_PATH,
+    fixturePaths,
     resultPath,
   })}\n`, { encoding: 'utf8', mode: 0o600 });
   return { configPath, resultPath, tokenDigest };
@@ -128,8 +131,8 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
   }
 }
 
-async function runPackagedSelfTest(profileDirectory) {
-  const capability = createSelfTestCapability(profileDirectory);
+async function runPackagedSelfTest(profileDirectory, fixturePaths) {
+  const capability = createSelfTestCapability(profileDirectory, fixturePaths);
   const processLogs = [];
   const child = spawn(APP_PATH, [
     `--nexoip-self-test=${capability.configPath}`,
@@ -155,11 +158,13 @@ async function runPackagedSelfTest(profileDirectory) {
     assert(result.code === 0, `Packaged self-test exited with code ${result.code}.`);
     assert(report.checks?.localRenderer?.url === 'nexoip://app/', 'Packaged renderer did not load the local app origin.');
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', 'Packaged renderer title was unexpected.');
-    assert(report.checks?.fixture?.name === path.basename(FIXTURE_PATH), 'Packaged fixture was not registered.');
-    assert(report.checks?.fixture?.bytesRead > 0, 'Packaged fixture was not read through the secure asset handle.');
+    assertPackagedFixtureMatrixReport(report, 'Packaged application');
     assert(report.checks?.preloadContract?.available === true, 'Packaged preload bridge was not available.');
-    assert(report.checks?.preloadContract?.modelBytes === report.checks?.fixture?.size,
-      'Packaged model protocol did not return the complete approved fixture.');
+    assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
+      'Packaged preload contract did not report every format fixture.');
+    assert(Number.isSafeInteger(report.checks?.preloadContract?.totalModelBytes)
+      && report.checks.preloadContract.totalModelBytes > 0,
+    'Packaged model protocol did not return the approved format fixtures.');
     assert(Array.isArray(report.checks?.bundledRuntimes) && report.checks.bundledRuntimes.length === 4,
       'Packaged Draco/Basis runtime report was incomplete.');
     assert(report.checks.bundledRuntimes.every((runtime) => runtime.status === 200 && runtime.bytes > 0),
@@ -187,18 +192,19 @@ async function runPackagedSelfTest(profileDirectory) {
 async function main() {
   assert(process.platform === 'win32', 'This packaged smoke check targets Windows x64.');
   assert(fs.existsSync(APP_PATH), `Missing packaged executable: ${APP_PATH}`);
-  assert(fs.existsSync(FIXTURE_PATH), `Missing model fixture: ${FIXTURE_PATH}`);
-  for (const locale of REQUIRED_LOCALES) {
-    assert(fs.existsSync(path.join(path.dirname(APP_PATH), 'locales', locale)),
-      `Missing packaged locale: ${locale}`);
-  }
-
+  const fixtureMatrix = await preparePackagedFixtureMatrix();
+  const fixturePaths = fixtureMatrix.fixtures.map((fixture) => fixture.fixturePath);
   const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'nexoip-smoke-'));
   try {
+    for (const locale of REQUIRED_LOCALES) {
+      assert(fs.existsSync(path.join(path.dirname(APP_PATH), 'locales', locale)),
+        `Missing packaged locale: ${locale}`);
+    }
     await assertDangerousArgumentsAreRejected(profileDirectory);
-    await runPackagedSelfTest(profileDirectory);
-    console.log('Packaged smoke passed: unsafe flags rejected; local renderer, targeted accessibility/responsive evidence, and fixture self-test passed without CDP.');
+    await runPackagedSelfTest(profileDirectory, fixturePaths);
+    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
   } finally {
+    await fixtureMatrix.cleanup();
     try {
       fs.rmSync(profileDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     } catch {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
-  X, Info, Eye, EyeOff, Layers, Box, Cpu, Palette, Download, Sparkles, Folder
+  X, Info, Eye, EyeOff, Layers, Box, ChevronDown, ChevronRight, Cpu, Palette, Download, Sparkles, Folder
 } from 'lucide-react';
 
 const INSPECTOR_TABS = [
@@ -242,8 +242,10 @@ function MaterialsTab({ materials }) {
 
 function RenderHierarchyNode({ node, level = 0, onToggle }) {
   const [visible, setVisible] = useState(Boolean(node?.visible));
+  const [expanded, setExpanded] = useState(level === 0);
 
   if (!node) return null;
+  const hasChildren = Boolean(node.children?.length);
 
   const handleToggle = () => {
     const nextState = !visible;
@@ -252,17 +254,33 @@ function RenderHierarchyNode({ node, level = 0, onToggle }) {
   };
 
   return (
-    <div style={{ paddingLeft: `${level * 12}px` }} className="text-xs">
+    <div className="text-xs">
       <div className="group flex min-h-8 items-center justify-between rounded px-2 py-1 hover:bg-white/10">
         <div className="flex min-w-0 items-center gap-2 truncate">
+          {hasChildren ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="min-h-8 min-w-8 shrink-0 rounded p-1.5 text-gray-200 hover:bg-white/10 hover:text-white"
+              aria-label={`${expanded ? 'Contraer' : 'Expandir'} ${node.name || 'nodo sin nombre'}`}
+              aria-expanded={expanded}
+            >
+              {expanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+            </button>
+          ) : <span className="w-8 shrink-0" aria-hidden="true" />}
           <Folder size={14} aria-hidden="true" className={node.isMesh ? 'text-purple-300' : 'text-amber-200'} />
           <span className={`truncate ${node.isMesh ? 'font-medium text-gray-100' : 'text-gray-300'}`}>{node.name || 'Nodo sin nombre'}</span>
+          {node.truncated && <span className="shrink-0 text-[10px] text-amber-200">límite</span>}
         </div>
         <button type="button" onClick={handleToggle} className="min-h-8 min-w-8 rounded p-1.5 text-gray-200 hover:bg-white/10 hover:text-white" aria-label={`${visible ? 'Ocultar' : 'Mostrar'} ${node.name || 'nodo sin nombre'}`} aria-pressed={visible}>
           {visible ? <Eye size={14} aria-hidden="true" className="text-purple-300" /> : <EyeOff size={14} aria-hidden="true" className="text-gray-300" />}
         </button>
       </div>
-      {node.children?.map((child) => <RenderHierarchyNode key={child.uuid || child.name} node={child} level={level + 1} onToggle={onToggle} />)}
+      {expanded && hasChildren && (
+        <div className="ml-3 border-l border-white/10 pl-2">
+          {node.children.map((child) => <RenderHierarchyNode key={child.uuid || child.name} node={child} level={level + 1} onToggle={onToggle} />)}
+        </div>
+      )}
     </div>
   );
 }

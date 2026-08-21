@@ -10,6 +10,8 @@ const LIBRARY_TABS = [
   { id: 'tree', label: 'Árbol', icon: FolderTree },
   { id: 'flat', label: 'Lista', icon: Box }
 ];
+const FLAT_PAGE_SIZE = 200;
+export const TREE_PAGE_SIZE = 100;
 
 export function isMatchingFile(file, query, extension) {
   if (!file?.id) return false;
@@ -24,6 +26,50 @@ export function treeHasMatches(node, query, extension) {
     || (node.children || []).some((child) => treeHasMatches(child, query, extension));
 }
 
+/**
+ * Prunes unmatched branches once per active filter. The unfiltered tree is
+ * deliberately returned by reference so a normal library view does not copy
+ * or walk a catalogue that may contain thousands of models.
+ */
+export function filterTreeForMatches(node, query, extension) {
+  if (!node) return null;
+  if (!query.trim() && extension === 'all') return node;
+
+  const files = (node.files || []).filter((file) => isMatchingFile(file, query, extension));
+  const children = [];
+  let matchingFilesCount = files.length;
+
+  for (const child of node.children || []) {
+    const matchingChild = filterTreeForMatches(child, query, extension);
+    if (!matchingChild) continue;
+    children.push(matchingChild);
+    matchingFilesCount += matchingChild.matchingFilesCount;
+  }
+
+  if (!files.length && !children.length) return null;
+  return { ...node, files, children, matchingFilesCount };
+}
+
+/**
+ * Keeps folders before files (the existing tree order) without first creating
+ * one large, rendered entry array for each directory.
+ */
+export function getTreePage(children = [], files = [], limit = TREE_PAGE_SIZE) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : TREE_PAGE_SIZE;
+  const visibleChildrenCount = Math.min(children.length, safeLimit);
+  const visibleFilesCount = Math.min(files.length, Math.max(0, safeLimit - visibleChildrenCount));
+  const visibleEntries = visibleChildrenCount + visibleFilesCount;
+  const totalEntries = children.length + files.length;
+
+  return {
+    visibleChildren: children.slice(0, visibleChildrenCount),
+    visibleFiles: files.slice(0, visibleFilesCount),
+    visibleEntries,
+    totalEntries,
+    remainingEntries: totalEntries - visibleEntries
+  };
+}
+
 export function nextRovingTabIndex(currentIndex, tabCount, key) {
   if (!tabCount) return null;
   if (key === 'ArrowRight' || key === 'ArrowDown') return (currentIndex + 1) % tabCount;
@@ -36,23 +82,41 @@ export function nextRovingTabIndex(currentIndex, tabCount, key) {
 export function scanProgressMessage(scanStatus, isScanning) {
   if (!isScanning) {
     if (scanStatus?.status === 'cancelled') {
-      return 'Escaneo detenido. Se conservan los modelos encontrados hasta la cancelación.';
+      return 'Escaneo detenido. Se conservan los modelos validados hasta la cancelación.';
     }
     if (scanStatus?.status === 'failed') {
       return 'El último escaneo no pudo completarse.';
     }
     if (scanStatus?.status === 'completed') {
-      return scanStatus?.truncated
-        ? 'Escaneo local completado con límites de seguridad; los resultados pueden ser parciales.'
-        : 'Escaneo local completado.';
+      const foundModels = scanStatus?.foundModels ?? scanStatus?.foundFiles ?? 0;
+      const skippedEntries = scanStatus?.skippedEntries ?? 0;
+      const oversizedModels = Math.min(scanStatus?.oversizedModels ?? 0, skippedEntries);
+      const invalidModels = Math.min(scanStatus?.invalidModels ?? 0, skippedEntries - oversizedModels);
+      const remainingSkipped = skippedEntries - oversizedModels - invalidModels;
+      const details = [];
+      if (oversizedModels > 0) {
+        details.push(`${oversizedModels} ${oversizedModels === 1 ? 'archivo supera' : 'archivos superan'} los 256 MB que el visor puede abrir de forma segura.`);
+      }
+      if (invalidModels > 0) {
+        details.push(`${invalidModels} ${invalidModels === 1 ? 'archivo no supera' : 'archivos no superan'} la comprobación estructural del formato.`);
+      }
+      if (remainingSkipped > 0) {
+        details.push(`${remainingSkipped} ${remainingSkipped === 1 ? 'elemento no se pudo indexar' : 'elementos no se pudieron indexar'} de forma segura.`);
+      }
+      return details.length
+        ? `Escaneo terminado: ${foundModels} modelos compatibles indexados. ${details.join(' ')}`
+        : `Escaneo completo: ${foundModels} modelos compatibles indexados.`;
     }
     return 'El escaneo se inicia solo cuando lo solicitas.';
   }
 
   const foundModels = scanStatus?.foundModels ?? scanStatus?.foundFiles ?? 0;
+  const availableModels = scanStatus?.availableModels ?? foundModels;
   const scannedDirectories = scanStatus?.scannedDirectories ?? scanStatus?.scannedFolders ?? 0;
-  const partial = scanStatus?.truncated ? ' Resultados parciales por límite de seguridad.' : '';
-  return `Escaneando: ${foundModels} modelos encontrados en ${scannedDirectories} carpetas.${partial}`;
+  const availability = availableModels === foundModels
+    ? `${foundModels} modelos validados y disponibles`
+    : `${foundModels} modelos validados; ${availableModels} disponibles`;
+  return `Escaneando: ${availability} en ${scannedDirectories} carpetas.`;
 }
 
 export function searchAnnouncement(query, extension, resultCount) {
@@ -101,8 +165,19 @@ export default function FileLibrarySidebar({
     () => files.filter((file) => isMatchingFile(file, query, selectedExt)),
     [files, query, selectedExt]
   );
-  const hasTreeMatches = treeHasMatches(folderTree, query, selectedExt);
+  const hasActiveTreeFilter = Boolean(query.trim()) || selectedExt !== 'all';
+  const filteredTree = useMemo(
+    () => filterTreeForMatches(folderTree, query, selectedExt),
+    [folderTree, query, selectedExt]
+  );
+  const hasTreeMatches = useMemo(() => {
+    if (!filteredTree) return false;
+    if (hasActiveTreeFilter) return true;
+    if (Number.isFinite(filteredTree.filesCount)) return filteredTree.filesCount > 0;
+    return treeHasMatches(filteredTree, '', 'all');
+  }, [filteredTree, hasActiveTreeFilter]);
   const activePanelId = `library-${instanceId}-panel-${activeTab}`;
+  const treePaginationKey = `${query}\u0000${selectedExt}\u0000${folderTree?.filesCount ?? files.length}\u0000${folderTree?.children?.length ?? 0}`;
 
   const requestClose = useCallback(() => {
     if (onRequestClose) onRequestClose();
@@ -151,7 +226,7 @@ export default function FileLibrarySidebar({
   if (!isOpen) return null;
 
   const scannedModelCount = scanStatus?.foundModels ?? scanStatus?.foundFiles;
-  const totalCached = scanStatus?.totalCached ?? scannedModelCount ?? files.length;
+  const totalCached = scanStatus?.availableModels ?? scanStatus?.totalCached ?? scannedModelCount ?? files.length;
   const statusMessage = scanProgressMessage(scanStatus, isScanning);
   const emptyMessage = files.length
     ? 'No hay coincidencias con los filtros actuales.'
@@ -218,7 +293,6 @@ export default function FileLibrarySidebar({
             <span className="shrink-0 font-mono font-bold text-emerald-200">{totalCached} modelos</span>
           </div>
           {isScanning && <progress className="h-2 w-full accent-amber-400" aria-label="Escaneo local en curso" />}
-          {scanStatus?.truncated && <span className="block text-amber-100">Se alcanzó un límite de seguridad; la biblioteca puede ser parcial.</span>}
           {!bridgeAvailable && <span className="block text-amber-100">Disponible solo desde la aplicación de escritorio.</span>}
         </div>
       </div>
@@ -242,10 +316,28 @@ export default function FileLibrarySidebar({
 
       <div className="flex-1 overflow-y-auto p-3" aria-busy={isRefreshing}>
         <div id={`library-${instanceId}-panel-tree`} role="tabpanel" aria-labelledby={`library-${instanceId}-tab-tree`} hidden={activeTab !== 'tree'} className="space-y-1.5">
-          {isRefreshing ? <LoadingLibraryState /> : (hasTreeMatches ? <TreeNode node={folderTree} query={query} extension={selectedExt} currentFileId={currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} /> : <EmptyLibraryState message={emptyMessage} canScan={!isScanning && bridgeAvailable} onStartScan={onStartScan} />)}
+          {isRefreshing ? <LoadingLibraryState /> : (hasTreeMatches ? (
+            <TreeNode
+              key={treePaginationKey}
+              node={filteredTree}
+              filterActive={hasActiveTreeFilter}
+              panelId={`library-${instanceId}-panel-tree`}
+              currentFileId={currentFileId}
+              onSelectFile={onSelectFile}
+              onRevealFile={onRevealFile}
+            />
+          ) : <EmptyLibraryState message={emptyMessage} canScan={!isScanning && bridgeAvailable} onStartScan={onStartScan} />)}
         </div>
         <div id={`library-${instanceId}-panel-flat`} role="tabpanel" aria-labelledby={`library-${instanceId}-tab-flat`} hidden={activeTab !== 'flat'} className="space-y-1.5">
-          {isRefreshing ? <LoadingLibraryState /> : (visibleFiles.length ? visibleFiles.map((file) => <ModelRow key={file.id} file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />) : <EmptyLibraryState message={emptyMessage} canScan={!isScanning && bridgeAvailable} onStartScan={onStartScan} />)}
+          {isRefreshing ? <LoadingLibraryState /> : (visibleFiles.length ? (
+            <FlatModelList
+              key={`${query}\u0000${selectedExt}\u0000${visibleFiles.length}\u0000${visibleFiles[0]?.id}\u0000${visibleFiles.at(-1)?.id}`}
+              files={visibleFiles}
+              currentFileId={currentFileId}
+              onSelectFile={onSelectFile}
+              onRevealFile={onRevealFile}
+            />
+          ) : <EmptyLibraryState message={emptyMessage} canScan={!isScanning && bridgeAvailable} onStartScan={onStartScan} />)}
         </div>
       </div>
     </aside>
@@ -284,14 +376,51 @@ function ModelRow({ file, isActive, onSelectFile, onRevealFile, compact = false 
   );
 }
 
-function TreeNode({ node, query, extension, currentFileId, onSelectFile, onRevealFile, level = 0 }) {
-  const [expanded, setExpanded] = useState(level < 2);
-  if (!node || !treeHasMatches(node, query, extension)) return null;
+function FlatModelList({ files, currentFileId, onSelectFile, onRevealFile }) {
+  const [limit, setLimit] = useState(FLAT_PAGE_SIZE);
+  const visible = files.slice(0, limit);
+  return (
+    <>
+      {visible.map((file) => (
+        <ModelRow key={file.id} file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />
+      ))}
+      {limit < files.length && (
+        <button
+          type="button"
+          onClick={() => setLimit((value) => Math.min(value + FLAT_PAGE_SIZE, files.length))}
+          className="mt-2 min-h-9 w-full rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-gray-100 hover:bg-white/10"
+        >
+          Mostrar {Math.min(FLAT_PAGE_SIZE, files.length - limit)} modelos más
+        </button>
+      )}
+      <p className="sr-only" aria-live="polite">Mostrando {visible.length} de {files.length} modelos.</p>
+    </>
+  );
+}
 
-  const children = (node.children || []).filter((child) => treeHasMatches(child, query, extension));
-  const files = (node.files || []).filter((file) => isMatchingFile(file, query, extension));
-  const hasContent = children.length > 0 || files.length > 0;
+function TreeNode({ node, filterActive, panelId, currentFileId, onSelectFile, onRevealFile, level = 0 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [limit, setLimit] = useState(TREE_PAGE_SIZE);
+  const paginationStatusId = `tree-page-${useId().replace(/:/g, '')}`;
+  if (!node) return null;
+
+  const children = node.children || [];
+  const files = node.files || [];
+  const { visibleChildren, visibleFiles, visibleEntries, totalEntries, remainingEntries } = getTreePage(children, files, limit);
+  const hasContent = totalEntries > 0;
   const isRoot = level === 0;
+  const revealFilteredMatches = filterActive;
+  const hasPagination = totalEntries > TREE_PAGE_SIZE;
+  const allEntriesVisible = remainingEntries === 0;
+  const modelCount = filterActive
+    ? node.matchingFilesCount ?? files.length
+    : node.filesCount ?? files.length;
+  const directoryName = isRoot ? 'Biblioteca local' : node.name;
+
+  const showMore = () => {
+    if (allEntriesVisible) return;
+    setLimit((value) => Math.min(value + TREE_PAGE_SIZE, totalEntries));
+  };
 
   return (
     <div className="text-xs" style={{ paddingLeft: isRoot ? 0 : 10 }}>
@@ -302,13 +431,43 @@ function TreeNode({ node, query, extension, currentFileId, onSelectFile, onRevea
             <Folder size={15} aria-hidden="true" className="shrink-0 text-amber-200" />
             <span className="truncate font-medium">{node.name}</span>
           </span>
-          <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-100">{node.filesCount ?? files.length}</span>
+          <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-100">{modelCount}</span>
         </button>
       )}
-      {(isRoot || expanded) && (
+      {(isRoot || expanded || revealFilteredMatches) && (
         <div className="space-y-0.5">
-          {children.map((child, index) => <TreeNode key={child.id || `${child.name}-${index}`} node={child} query={query} extension={extension} currentFileId={currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} level={level + 1} />)}
-          {files.map((file) => <ModelRow key={file.id} compact file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />)}
+          {visibleChildren.map((child, index) => (
+            <TreeNode
+              key={child.id || `${child.name}-${index}`}
+              node={child}
+              filterActive={filterActive}
+              panelId={panelId}
+              currentFileId={currentFileId}
+              onSelectFile={onSelectFile}
+              onRevealFile={onRevealFile}
+              level={level + 1}
+            />
+          ))}
+          {visibleFiles.map((file) => <ModelRow key={file.id} compact file={file} isActive={file.id === currentFileId} onSelectFile={onSelectFile} onRevealFile={onRevealFile} />)}
+          {hasPagination && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={showMore}
+                aria-controls={panelId}
+                aria-describedby={paginationStatusId}
+                aria-disabled={allEntriesVisible}
+                className={`min-h-9 w-full rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-gray-100 ${allEntriesVisible ? 'cursor-not-allowed opacity-70' : 'hover:bg-white/10'}`}
+              >
+                {allEntriesVisible
+                  ? 'Todos los elementos est\u00e1n visibles'
+                  : `Mostrar ${Math.min(TREE_PAGE_SIZE, remainingEntries)} elementos m\u00e1s (${remainingEntries} restantes)`}
+              </button>
+              <p id={paginationStatusId} className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                Mostrando {visibleEntries} de {totalEntries} elementos en {directoryName}.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

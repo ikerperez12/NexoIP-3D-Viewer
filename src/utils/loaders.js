@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getFileExtension, SUPPORTED_MODEL_EXTENSIONS } from './nexoip.js';
+import { configureKtx2StaticWorker } from './ktx2-static-worker.js';
 
 export const DEFAULT_MODEL_BUDGET = Object.freeze({
   maxNodes: 50_000,
@@ -23,6 +24,11 @@ const MODEL_BUDGET_LABELS = Object.freeze({
   texturePixels: 'píxeles de textura',
   animations: 'animaciones',
   animationTracks: 'pistas de animación'
+});
+
+const DEFAULT_HIERARCHY_LIMITS = Object.freeze({
+  maxNodes: 2_000,
+  maxDepth: 64
 });
 
 export class ModelBudgetError extends Error {
@@ -78,6 +84,73 @@ function createLocalLoadingManager(baseUrl, bundledRoots = []) {
     return resolved;
   });
   return manager;
+}
+
+function createLoadingManagerBarrier(manager, signal) {
+  let started = false;
+  let settled = false;
+  let resolveCompletion;
+  let rejectCompletion;
+  const previous = {
+    onStart: manager.onStart,
+    onLoad: manager.onLoad,
+    onError: manager.onError
+  };
+  const completion = new Promise((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+
+  const cleanup = () => {
+    signal?.removeEventListener('abort', handleAbort);
+    if (manager.onStart === handleStart) manager.onStart = previous.onStart;
+    if (manager.onLoad === handleLoad) manager.onLoad = previous.onLoad;
+    if (manager.onError === handleError) manager.onError = previous.onError;
+  };
+  const settle = (callback) => {
+    if (settled) return;
+    settled = true;
+    callback();
+  };
+  const handleStart = (...args) => {
+    started = true;
+    previous.onStart?.(...args);
+  };
+  const handleLoad = (...args) => {
+    previous.onLoad?.(...args);
+    settle(resolveCompletion);
+  };
+  const handleError = (url) => {
+    previous.onError?.(url);
+    settle(() => rejectCompletion(new Error('No se pudo cargar una textura local del modelo.')));
+  };
+  const handleAbort = () => {
+    settle(() => rejectCompletion(new DOMException('La carga se canceló.', 'AbortError')));
+  };
+
+  manager.onStart = handleStart;
+  manager.onLoad = handleLoad;
+  manager.onError = handleError;
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  return {
+    async wait() {
+      try {
+        // Loader parsers schedule every ImageLoader request synchronously. The
+        // microtask lets a parser with no sidecars complete without a timer.
+        await Promise.resolve();
+        throwIfAborted(signal);
+        if (started) await completion;
+        throwIfAborted(signal);
+      } finally {
+        cleanup();
+      }
+    },
+    cancel() {
+      settle(resolveCompletion);
+      cleanup();
+    }
+  };
 }
 
 async function fetchArrayBuffer(url, onProgress, signal) {
@@ -166,7 +239,10 @@ async function loadGltf(url, onProgress, { renderer, signal }) {
   const manager = createLocalLoadingManager(baseUrl, [dracoRoot, basisRoot]);
   const dracoLoader = new DRACOLoader(manager).setDecoderPath(dracoRoot);
   dracoLoader.setDecoderConfig({ type: 'wasm' });
-  const ktx2Loader = new KTX2Loader(manager).setTranscoderPath(basisRoot);
+  const ktx2Loader = configureKtx2StaticWorker(
+    new KTX2Loader(manager).setTranscoderPath(basisRoot),
+    basisRoot,
+  );
   if (renderer) ktx2Loader.detectSupport(renderer);
 
   const loader = new GLTFLoader(manager)
@@ -221,7 +297,17 @@ async function loadObj(url, onProgress, signal) {
     loader.setMaterials(materials);
   }
 
-  return loader.parse(text);
+  const sidecars = createLoadingManagerBarrier(manager, signal);
+  let object;
+  try {
+    object = loader.parse(text);
+    await sidecars.wait();
+    return object;
+  } catch (error) {
+    sidecars.cancel();
+    if (object) disposeModelResources(object);
+    throw error;
+  }
 }
 
 async function loadStl(url, fileName, onProgress, signal) {
@@ -252,8 +338,18 @@ async function loadFbx(url, onProgress, signal) {
   const baseUrl = getBaseUrl(url);
   const manager = createLocalLoadingManager(baseUrl);
   manager.addHandler(/\.tga$/i, new TGALoader(manager));
-  const group = new FBXLoader(manager).parse(await fetchArrayBuffer(url, onProgress, signal), baseUrl);
-  return { group, animations: group.animations || [] };
+  const buffer = await fetchArrayBuffer(url, onProgress, signal);
+  const sidecars = createLoadingManagerBarrier(manager, signal);
+  let group;
+  try {
+    group = new FBXLoader(manager).parse(buffer, baseUrl);
+    await sidecars.wait();
+    return { group, animations: group.animations || [] };
+  } catch (error) {
+    sidecars.cancel();
+    if (group) disposeModelResources(group);
+    throw error;
+  }
 }
 
 async function loadPly(url, fileName, onProgress, signal) {
@@ -294,7 +390,17 @@ async function loadDae(url, onProgress, signal) {
   const baseUrl = getBaseUrl(url);
   const manager = createLocalLoadingManager(baseUrl);
   const text = new TextDecoder().decode(await fetchArrayBuffer(url, onProgress, signal));
-  return new ColladaLoader(manager).parse(text, baseUrl);
+  const sidecars = createLoadingManagerBarrier(manager, signal);
+  let collada;
+  try {
+    collada = new ColladaLoader(manager).parse(text, baseUrl);
+    await sidecars.wait();
+    return collada;
+  } catch (error) {
+    sidecars.cancel();
+    if (collada?.scene) disposeModelResources(collada.scene);
+    throw error;
+  }
 }
 
 function eachObjectIterative(rootObject, visitor) {
@@ -344,10 +450,12 @@ export function inspectModelResources(rootObject, animations = []) {
     nodes += 1;
     depth = Math.max(depth, objectDepth);
     const positionCount = object.geometry?.attributes?.position?.count || 0;
-    if (object.isMesh || object.isPoints || object.isLine) vertices += positionCount;
+    const instanceMultiplier = object.isInstancedMesh ? Math.max(0, Number(object.count) || 0) : 1;
+    if (object.isMesh || object.isPoints || object.isLine) vertices += positionCount * instanceMultiplier;
     if (object.isMesh) {
       meshes += 1;
-      triangles += object.geometry?.index ? object.geometry.index.count / 3 : positionCount / 3;
+      const primitiveTriangles = object.geometry?.index ? object.geometry.index.count / 3 : positionCount / 3;
+      triangles += primitiveTriangles * instanceMultiplier;
     } else if (object.isPoints) {
       pointClouds += 1;
     } else if (object.isLine) {
@@ -566,7 +674,7 @@ export function extractModelStats(rootObject, animations = []) {
     materials: Array.from(materialsMap.values()),
     animationsCount: animations.length,
     animationNames: animations.map((animation, index) => animation.name || `Animación ${index + 1}`),
-    hierarchy: buildHierarchyTree(rootObject)
+    hierarchy: buildHierarchyTree(rootObject, DEFAULT_HIERARCHY_LIMITS)
   };
 }
 

@@ -228,6 +228,21 @@ describe('real model loader paths and resource budgets', () => {
     disposeModelResources(mesh);
   });
 
+  it('charges instanced geometry against decoded vertex and triangle budgets', () => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0
+    ], 3));
+    const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 100_000);
+
+    expect(inspectModelResources(mesh)).toMatchObject({ vertices: 300_000, triangles: 100_000 });
+    expect(() => assertModelWithinBudget(mesh, [], { ...DEFAULT_MODEL_BUDGET, maxTriangles: 99_999 }))
+      .toThrow(ModelBudgetError);
+    disposeModelResources(mesh);
+  });
+
   it('builds a bounded hierarchy iteratively and reports non-mesh primitives', () => {
     const root = new THREE.Group();
     let parent = root;
@@ -244,6 +259,21 @@ describe('real model loader paths and resource budgets', () => {
     const stats = extractModelStats(root);
     expect(stats.pointClouds).toBe(1);
     expect(stats.meshes).toBe(0);
+    disposeModelResources(root);
+  });
+
+  it('keeps inspector hierarchy data below its dedicated presentation budget', () => {
+    const root = new THREE.Group();
+    for (let index = 0; index < 2_100; index += 1) {
+      const child = new THREE.Group();
+      child.name = `node-${index}`;
+      root.add(child);
+    }
+
+    const stats = extractModelStats(root);
+    expect(stats.nodes).toBe(2_101);
+    expect(stats.hierarchy.children).toHaveLength(1_999);
+    expect(stats.hierarchy.truncated).toBe(true);
     disposeModelResources(root);
   });
 });

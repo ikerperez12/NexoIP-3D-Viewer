@@ -7,6 +7,12 @@ import DropZone from './components/DropZone.jsx';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import { exportModelAsGlb } from './utils/exporters.js';
 import {
+  createCatalogRefreshQueue,
+  createCatalogRequestGuard,
+  getPublishedModelCount,
+} from './utils/catalog-request.js';
+import { prefersReducedMotion } from './utils/motion-preference.js';
+import {
   callNexoip,
   ELECTRON_BRIDGE_ERROR,
   getNexoipBridge,
@@ -55,10 +61,11 @@ export default function App() {
   const [resetCameraRequest, setResetCameraRequest] = useState(0);
   const [snapshotRequest, setSnapshotRequest] = useState(0);
   const [nodeVisibilityToggle, setNodeVisibilityToggle] = useState(null);
+  const reducedMotionRef = useRef(prefersReducedMotion());
 
   const [animations, setAnimations] = useState([]);
   const [currentClipIndex, setCurrentClipIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(() => !prefersReducedMotion());
   const [progress, setProgress] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [seekRequest, setSeekRequest] = useState(null);
@@ -70,11 +77,35 @@ export default function App() {
   const exportInProgressRef = useRef(false);
   const sidebarTriggerRef = useRef(null);
   const inspectorTriggerRef = useRef(null);
+  const currentFileRef = useRef(null);
+  const scanStatusRequestRef = useRef(null);
+  const publishedCatalogCountRef = useRef(null);
+  const finalScanCatalogRefreshRef = useRef(null);
+  const catalogRefreshQueueRef = useRef(null);
+  const [catalogRequestGuard] = useState(createCatalogRequestGuard);
+
+  const clearLoadedModelState = useCallback(() => {
+    setModelData(null);
+    setAnimations([]);
+    setCurrentClipIndex(0);
+    setIsPlaying(!reducedMotionRef.current);
+    setProgress(0);
+    setSeekRequest({ value: 0, timestamp: Date.now() });
+  }, []);
+
+  const changeCurrentFile = useCallback((nextFile) => {
+    const identityChanged = currentFileRef.current?.id !== nextFile?.id;
+    currentFileRef.current = nextFile;
+    setCurrentFile(nextFile);
+    if (identityChanged) clearLoadedModelState();
+  }, [clearLoadedModelState]);
 
   const currentIndex = useMemo(
     () => filesList.findIndex((file) => file.id === currentFile?.id),
     [currentFile?.id, filesList]
   );
+  const activeModelData = modelData?.modelId === currentFile?.id ? modelData : null;
+  const activeAnimations = activeModelData ? animations : [];
 
   const showToast = useCallback((message, type = 'success') => {
     window.clearTimeout(toastTimerRef.current);
@@ -94,45 +125,93 @@ export default function App() {
     return () => mediaQuery.removeEventListener('change', updateLayout);
   }, []);
 
-  const refreshScanStatus = useCallback(async () => {
-    if (!bridgeAvailable) return null;
-    const status = responseStatus(await callNexoip('getScanStatus'));
-    const active = isScanInProgress(status);
-    setScanStatus(status);
-    setIsScanning(active);
-    return { status, active };
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = (event) => {
+      reducedMotionRef.current = event.matches;
+      if (event.matches) setIsPlaying(false);
+    };
+    mediaQuery.addEventListener('change', updatePreference);
+    return () => mediaQuery.removeEventListener('change', updatePreference);
+  }, []);
+
+  const refreshScanStatus = useCallback(() => {
+    if (!bridgeAvailable) return Promise.resolve(null);
+
+    const pendingRequest = scanStatusRequestRef.current;
+    if (pendingRequest) return pendingRequest.promise;
+
+    const requestToken = Symbol('scan-status');
+    const request = callNexoip('getScanStatus')
+      .then((response) => {
+        const status = responseStatus(response);
+        const active = isScanInProgress(status);
+        setScanStatus(status);
+        setIsScanning(active);
+        return {
+          status,
+          active,
+          publishedModelCount: getPublishedModelCount(status),
+        };
+      })
+      .finally(() => {
+        if (scanStatusRequestRef.current?.token === requestToken) {
+          scanStatusRequestRef.current = null;
+        }
+      });
+
+    scanStatusRequestRef.current = { token: requestToken, promise: request };
+    return request;
   }, [bridgeAvailable]);
 
-  const loadCatalog = useCallback(async ({ announce = false } = {}) => {
+  const loadCatalogOnce = useCallback(async ({ announce = false, preserveCurrentSelection = false } = {}) => {
     if (!bridgeAvailable) return false;
+    const requestGeneration = catalogRequestGuard.begin();
 
     try {
       const [modelsResponse, treeResponse] = await Promise.all([
         callNexoip('listModels', { sortBy: 'name', order: 'asc' }),
         callNexoip('getTree')
       ]);
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+
       const nextFiles = responseFiles(modelsResponse).filter((file) => file?.id);
       setFilesList(nextFiles);
       setFolderTree(responseTree(treeResponse));
-      if (nextFiles.length === 0) {
-        setModelData(null);
-        setAnimations([]);
-        setProgress(0);
+      const previous = currentFileRef.current;
+      const selected = previous && nextFiles.find((file) => file.id === previous.id);
+      if (selected) {
+        changeCurrentFile(selected);
+      } else if (!preserveCurrentSelection || !previous) {
+        changeCurrentFile(nextFiles[0] || null);
       }
-      setCurrentFile((previous) => {
-        const selected = previous && nextFiles.find((file) => file.id === previous.id);
-        return selected || nextFiles[0] || null;
-      });
       setCatalogError(null);
       if (announce) showToast(`${nextFiles.length} modelos disponibles en la biblioteca.`);
       return true;
     } catch (error) {
+      if (!catalogRequestGuard.isCurrent(requestGeneration)) return false;
+
       const message = getErrorMessage(error, 'No se pudo cargar la biblioteca local.');
       setCatalogError(message);
       if (announce) showToast(message, 'error');
       return false;
     }
-  }, [bridgeAvailable, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, showToast]);
+
+  const loadCatalog = useCallback((options = {}) => {
+    if (!bridgeAvailable) return Promise.resolve(false);
+    if (!catalogRefreshQueueRef.current) {
+      catalogRefreshQueueRef.current = createCatalogRefreshQueue(loadCatalogOnce);
+    }
+    return catalogRefreshQueueRef.current.request(options);
+  }, [bridgeAvailable, loadCatalogOnce]);
+
+  const refreshFinalScanCatalog = useCallback(() => {
+    if (!finalScanCatalogRefreshRef.current) {
+      finalScanCatalogRefreshRef.current = loadCatalog();
+    }
+    return finalScanCatalogRefreshRef.current;
+  }, [loadCatalog]);
 
   useEffect(() => {
     if (!bridgeAvailable) return undefined;
@@ -140,9 +219,9 @@ export default function App() {
       void callNexoip('consumeStartupModel')
         .then((registered) => {
           if (registered?.id) {
+            catalogRequestGuard.invalidate();
             setFilesList([registered]);
-            setCurrentFile(registered);
-            setModelData(null);
+            changeCurrentFile(registered);
             showToast(`Cargando ${registered.name}…`);
             return loadCatalog();
           }
@@ -152,42 +231,87 @@ export default function App() {
       void refreshScanStatus().catch((error) => setCatalogError(getErrorMessage(error, 'No se pudo consultar el escáner local.')));
     }, 0);
     return () => window.clearTimeout(startupTask);
-  }, [bridgeAvailable, loadCatalog, refreshScanStatus, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, loadCatalog, refreshScanStatus, showToast]);
 
   useEffect(() => {
     const bridge = getNexoipBridge();
     if (!bridgeAvailable || typeof bridge?.onModelOpened !== 'function') return undefined;
     bridge.onModelOpened((registered) => {
       if (!registered?.id) return;
+      catalogRequestGuard.invalidate();
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
-      setCurrentFile(registered);
-      setModelData(null);
+      changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
     });
     return undefined;
-  }, [bridgeAvailable, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, changeCurrentFile, showToast]);
 
   useEffect(() => {
     if (!bridgeAvailable || (!isScanning && !scanRequestPending)) return undefined;
 
-    scanWasActiveRef.current = true;
-    const interval = window.setInterval(() => {
+    const reportPollingError = (error) => {
+      const message = getErrorMessage(error, 'No se pudo actualizar el progreso del escaneo.');
+      setCatalogError((previous) => previous === message ? previous : message);
+    };
+
+    const refreshPublishedCatalog = (publishedModelCount) => {
+      if (publishedModelCount === null || publishedModelCount === publishedCatalogCountRef.current) {
+        return;
+      }
+
+      publishedCatalogCountRef.current = publishedModelCount;
+      void loadCatalog({ preserveCurrentSelection: true })
+        .then((updated) => {
+          // A transient IPC failure must not prevent a later poll with the
+          // same available count from repairing the visible catalog.
+          if (!updated && publishedCatalogCountRef.current === publishedModelCount) {
+            publishedCatalogCountRef.current = null;
+          }
+        })
+        .catch(reportPollingError);
+    };
+
+    const pollScanStatus = () => {
       void refreshScanStatus()
-        .then(({ active }) => {
-          if (active) scanWasActiveRef.current = true;
+        .then((scanResult) => {
+          if (!scanResult) return;
+
+          const { active, publishedModelCount } = scanResult;
+          if (active) {
+            if (!scanWasActiveRef.current) {
+              scanWasActiveRef.current = true;
+              publishedCatalogCountRef.current = null;
+              // A catalog read that began before the scan may return an older
+              // snapshot after progressive publication has started.
+              catalogRequestGuard.invalidate();
+            }
+            refreshPublishedCatalog(publishedModelCount);
+            return;
+          }
+
           if (scanWasActiveRef.current && !active) {
             scanWasActiveRef.current = false;
             setIsScanning(false);
-            void loadCatalog({ announce: true });
+            publishedCatalogCountRef.current = null;
+            void refreshFinalScanCatalog().catch(reportPollingError);
           }
         })
-        .catch((error) => {
-          setCatalogError(getErrorMessage(error, 'No se pudo actualizar el progreso del escaneo.'));
-        });
-    }, 1000);
+        .catch(reportPollingError);
+    };
+
+    pollScanStatus();
+    const interval = window.setInterval(pollScanStatus, 1000);
 
     return () => window.clearInterval(interval);
-  }, [bridgeAvailable, isScanning, loadCatalog, refreshScanStatus, scanRequestPending]);
+  }, [
+    bridgeAvailable,
+    catalogRequestGuard,
+    isScanning,
+    loadCatalog,
+    refreshFinalScanCatalog,
+    refreshScanStatus,
+    scanRequestPending,
+  ]);
 
   const handleStartScan = useCallback(async () => {
     if (!bridgeAvailable) {
@@ -198,6 +322,8 @@ export default function App() {
     try {
       setScanRequestPending(true);
       scanWasActiveRef.current = false;
+      publishedCatalogCountRef.current = null;
+      finalScanCatalogRefreshRef.current = null;
       showToast('Elige una o más carpetas para iniciar el escaneo local.');
       const result = await callNexoip('scan');
       const status = responseStatus(result);
@@ -210,12 +336,13 @@ export default function App() {
       if (result?.cancelled && typeof result?.status !== 'string') {
         showToast('No se seleccionaron carpetas. La biblioteca no se ha modificado.');
       } else if (result?.cancelled || status?.status === 'cancelled') {
-        await loadCatalog();
-        showToast(`Escaneo detenido: se conservan ${result?.count ?? 0} modelos indexados hasta ese momento.`);
+        await refreshFinalScanCatalog();
+        showToast(`Escaneo detenido: ${result?.count ?? 0} modelos validados siguen disponibles.`);
       } else if (active) {
+        catalogRequestGuard.invalidate();
         showToast('Escaneo local en curso.');
       } else {
-        await loadCatalog({ announce: true });
+        await refreshFinalScanCatalog();
         showToast(`Escaneo completado: ${result?.count ?? 0} modelos indexados.`);
       }
     } catch (error) {
@@ -224,7 +351,7 @@ export default function App() {
       setIsCancellingScan(false);
       showToast(getErrorMessage(error, 'No se pudo iniciar el escaneo local.'), 'error');
     }
-  }, [bridgeAvailable, loadCatalog, showToast]);
+  }, [bridgeAvailable, catalogRequestGuard, refreshFinalScanCatalog, showToast]);
 
   const handleCancelScan = useCallback(async () => {
     if (!bridgeAvailable || isCancellingScan) return;
@@ -255,10 +382,9 @@ export default function App() {
       showToast('El modelo seleccionado ya no está disponible. Actualiza la biblioteca.', 'error');
       return;
     }
-    setCurrentFile(nextFile);
-    setModelData(null);
+    changeCurrentFile(nextFile);
     showToast(`Cargando ${nextFile.name}…`);
-  }, [filesList, showToast]);
+  }, [changeCurrentFile, filesList, showToast]);
 
   const selectRelativeModel = useCallback((offset) => {
     if (filesList.length === 0) return;
@@ -298,8 +424,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectRelativeModel]);
 
-  const handleModelLoaded = useCallback(({ object, exportObject, animations: nextAnimations, stats, metadata }) => {
+  const handleModelLoaded = useCallback(({ modelId, object, exportObject, animations: nextAnimations, stats, metadata }) => {
     setModelData({
+      modelId,
       object,
       exportObject: exportObject || object,
       animations: nextAnimations || [],
@@ -308,7 +435,7 @@ export default function App() {
     });
     setAnimations(nextAnimations || []);
     setCurrentClipIndex(0);
-    setIsPlaying(true);
+    setIsPlaying(!reducedMotionRef.current);
     setProgress(0);
     setSeekRequest({ value: 0, timestamp: Date.now() });
   }, []);
@@ -320,7 +447,7 @@ export default function App() {
   const handleClipChange = useCallback((clipIndex) => {
     setCurrentClipIndex(clipIndex);
     setProgress(0);
-    setIsPlaying(true);
+    setIsPlaying(!reducedMotionRef.current);
     setSeekRequest({ value: 0, timestamp: Date.now() });
   }, []);
 
@@ -348,14 +475,14 @@ export default function App() {
     try {
       const registered = responseModel(await callNexoip('registerDropped', file));
       if (!registered?.id) throw new Error('La aplicación no pudo registrar el archivo local.');
+      catalogRequestGuard.invalidate();
       setFilesList((previous) => [registered, ...previous.filter((item) => item.id !== registered.id)]);
-      setCurrentFile(registered);
-      setModelData(null);
+      changeCurrentFile(registered);
       showToast(`Cargando ${registered.name}…`);
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo abrir el archivo local.'), 'error');
     }
-  }, [showToast]);
+  }, [catalogRequestGuard, changeCurrentFile, showToast]);
 
   const downloadBlob = useCallback((blob, fileName) => {
     const objectUrl = URL.createObjectURL(blob);
@@ -367,7 +494,7 @@ export default function App() {
   }, []);
 
   const handleExportModel = useCallback(async (format) => {
-    const exportObject = modelData?.exportObject || modelData?.object;
+    const exportObject = activeModelData?.exportObject || activeModelData?.object;
     if (!exportObject) {
       showToast('No hay modelo cargado para exportar.', 'error');
       return;
@@ -393,9 +520,9 @@ export default function App() {
         downloadBlob(new Blob([result], { type: 'text/plain' }), `${name}.obj`);
         showToast(`Geometría original exportada como ${name}.obj. Las texturas no se incluyen en este archivo.`);
       } else if (format === 'glb') {
-        const gltf = await exportModelAsGlb(exportObject, modelData.animations || []);
+        const gltf = await exportModelAsGlb(exportObject, activeModelData.animations || []);
         downloadBlob(new Blob([gltf], { type: 'model/gltf-binary' }), `${name}.glb`);
-        const clipCount = modelData.animations?.length || 0;
+        const clipCount = activeModelData.animations?.length || 0;
         showToast(`Activo original exportado como ${name}.glb${clipCount ? ` con ${clipCount} animaciones` : ''}.`);
       } else {
         throw new Error('Formato de exportación no compatible.');
@@ -408,10 +535,14 @@ export default function App() {
       exportInProgressRef.current = false;
       setIsExporting(false);
     }
-  }, [currentFile?.name, downloadBlob, modelData, showToast]);
+  }, [activeModelData, currentFile?.name, downloadBlob, showToast]);
 
   return (
-    <main className="relative h-full w-full overflow-hidden bg-black" aria-label="NexoIP 3D Viewer">
+    <main
+      className="relative h-full w-full overflow-hidden bg-black"
+      aria-label="NexoIP 3D Viewer"
+      data-loaded-model-id={activeModelData?.modelId || undefined}
+    >
       <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-black text-sm text-gray-200" role="status">Preparando el visor 3D…</div>}>
         <Viewport3D
           currentFile={currentFile}
@@ -432,15 +563,12 @@ export default function App() {
           onModelLoaded={handleModelLoaded}
           onAnimationProgress={handleAnimationProgress}
           onSnapshotResult={(error) => showToast(error || 'Captura guardada.', error ? 'error' : 'success')}
-          onModelError={(message) => {
+          onModelError={() => {
             setModelData(null);
             setAnimations([]);
-            showToast(message, 'error');
           }}
           onChooseAnotherModel={() => {
-            setCurrentFile(null);
-            setModelData(null);
-            setAnimations([]);
+            changeCurrentFile(null);
             setSidebarOpen(true);
           }}
           nodeVisibilityToggle={nodeVisibilityToggle}
@@ -507,7 +635,7 @@ export default function App() {
       />
 
       <ModelInspector
-        stats={modelData?.stats || null}
+        stats={activeModelData?.stats || null}
         isOpen={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         onRequestClose={() => setInspectorOpen(false)}
@@ -518,7 +646,7 @@ export default function App() {
       />
 
       <AnimationController
-        animations={animations}
+        animations={activeAnimations}
         currentClipIndex={currentClipIndex}
         onClipChange={handleClipChange}
         isPlaying={isPlaying}

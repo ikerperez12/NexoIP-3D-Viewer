@@ -8,6 +8,7 @@ test('HEAD model responses close their verified stream and preserve safe metadat
 
   const response = createSecureModelResponse('HEAD', { path: 'scene.gltf', size: 42, stream }, 'model/gltf+json');
   expect(response.body).toBeNull();
+  expect(response.headers.get('cache-control')).toBe('no-store');
   expect(response.headers.get('content-length')).toBe('42');
   expect(response.headers.get('content-type')).toBe('model/gltf+json');
   expect(response.headers.get('x-content-type-options')).toBe('nosniff');

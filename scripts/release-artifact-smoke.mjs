@@ -4,15 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  assertPackagedFixtureMatrixReport,
+  preparePackagedFixtureMatrix,
+} from './packaged-fixture-matrix.mjs';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIRECTORY = path.dirname(SCRIPT_PATH);
 const REPOSITORY_DIRECTORY = path.resolve(SCRIPT_DIRECTORY, '..');
 const RELEASE_DIRECTORY = path.join(REPOSITORY_DIRECTORY, 'release');
-const FIXTURE_PATH = path.join(REPOSITORY_DIRECTORY, 'tests', 'fixtures', 'nexoip-sample.stl');
 const DIAGNOSTICS_DIRECTORY = path.join(REPOSITORY_DIRECTORY, 'test-results');
 const TEMPORARY_ROOT_PREFIX = 'nexoip-release-artifact-smoke-';
-const SELF_TEST_TIMEOUT_MS = 60_000;
+const SELF_TEST_TIMEOUT_MS = 180_000;
 const INSTALLER_TIMEOUT_MS = 90_000;
 const UNINSTALLER_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 15_000;
@@ -270,7 +273,7 @@ async function waitForAbsence(filePath, timeoutMs, label) {
   throw new Error(`${label} did not remove ${filePath}.`);
 }
 
-function createSelfTestCapability(profileDirectory) {
+function createSelfTestCapability(profileDirectory, fixturePaths) {
   const token = randomBytes(32).toString('hex');
   const tokenDigest = createHash('sha256').update(token).digest('hex');
   const nonce = randomBytes(16).toString('hex');
@@ -278,9 +281,9 @@ function createSelfTestCapability(profileDirectory) {
   const resultPath = path.join(profileDirectory, `result-${nonce}.json`);
 
   fs.writeFileSync(configPath, `${JSON.stringify({
-    version: 1,
+    version: 2,
     token,
-    fixturePath: FIXTURE_PATH,
+    fixturePaths,
     resultPath,
   })}\n`, { encoding: 'utf8', mode: 0o600 });
 
@@ -295,9 +298,9 @@ function createSmokeEnvironment(temporaryDirectory) {
   };
 }
 
-async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDirectory, temporaryDirectory }) {
+async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDirectory, temporaryDirectory, fixturePaths }) {
   fs.mkdirSync(profileDirectory, { recursive: true });
-  const capability = createSelfTestCapability(profileDirectory);
+  const capability = createSelfTestCapability(profileDirectory, fixturePaths);
   const launched = startProcess(executablePath, [
     `--nexoip-self-test=${capability.configPath}`,
     `--nexoip-self-test-token-sha256=${capability.tokenDigest}`,
@@ -319,14 +322,14 @@ async function runCapabilitySelfTest({ executablePath, artifactLabel, profileDir
       `${artifactLabel} capability self-test exited with code ${processResult.code} (signal ${processResult.signal}).`);
     assert(report.checks?.localRenderer?.url === 'nexoip://app/', `${artifactLabel} did not load the local renderer origin.`);
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', `${artifactLabel} renderer title was unexpected.`);
-    assert(report.checks?.fixture?.name === path.basename(FIXTURE_PATH), `${artifactLabel} did not register the self-test fixture.`);
-    assert(report.checks?.fixture?.bytesRead > 0, `${artifactLabel} did not read the fixture through the capability boundary.`);
+    assertPackagedFixtureMatrixReport(report, artifactLabel);
     assert(report.checks?.preloadContract?.available === true,
       `${artifactLabel} self-test did not expose the expected preload bridge.`);
-    assert(Number.isSafeInteger(report.checks?.preloadContract?.modelBytes)
-      && report.checks.preloadContract.modelBytes > 0
-      && report.checks.preloadContract.modelBytes === report.checks.fixture.size,
-    `${artifactLabel} self-test did not read the complete approved model through the bridge.`);
+    assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
+      `${artifactLabel} self-test did not report every format fixture through the bridge.`);
+    assert(Number.isSafeInteger(report.checks?.preloadContract?.totalModelBytes)
+      && report.checks.preloadContract.totalModelBytes > 0,
+    `${artifactLabel} self-test did not read the approved format fixtures through the bridge.`);
     assert(report.checks?.preloadContract?.noDebuggingTransport === true,
       `${artifactLabel} self-test did not confirm its no-CDP transport policy.`);
     assert(Array.isArray(report.checks?.bundledRuntimes) && report.checks.bundledRuntimes.length === 4,
@@ -660,8 +663,6 @@ async function main() {
   const metadata = readReleaseMetadata();
   assertRegularFile(metadata.installerPath, 'NSIS installer artifact');
   assertRegularFile(metadata.portablePath, 'portable artifact');
-  assertRegularFile(FIXTURE_PATH, 'self-test fixture');
-
   const registryKeys = assertNoExistingNsisInstallation(metadata);
   const shortcutPaths = getShortcutPaths(metadata.shortcutName);
   assertNoExistingShortcuts(shortcutPaths);
@@ -683,6 +684,9 @@ async function main() {
   fs.mkdirSync(installerTemporaryDirectory, { recursive: true });
   fs.mkdirSync(uninstallerTemporaryDirectory, { recursive: true });
   fs.mkdirSync(portableTemporaryDirectory, { recursive: true });
+
+  const fixtureMatrix = await preparePackagedFixtureMatrix(REPOSITORY_DIRECTORY);
+  const fixturePaths = fixtureMatrix.fixtures.map((fixture) => fixture.fixturePath);
 
   let primaryError;
   let nsisInstallationNeedsCleanup = false;
@@ -710,6 +714,7 @@ async function main() {
       artifactLabel: 'Installed NSIS application',
       profileDirectory: installedUserDataDirectory,
       temporaryDirectory: installerTemporaryDirectory,
+      fixturePaths,
     });
 
     uninstallerAttempted = true;
@@ -727,6 +732,7 @@ async function main() {
       artifactLabel: 'Portable application',
       profileDirectory: portableUserDataDirectory,
       temporaryDirectory: portableTemporaryDirectory,
+      fixturePaths,
     });
     logDiagnostic('Portable artifact completed the same capability self-test without CDP.');
   } catch (error) {
@@ -770,6 +776,11 @@ async function main() {
   } catch (error) {
     cleanupFailures.push(error);
   }
+  try {
+    await fixtureMatrix.cleanup();
+  } catch (error) {
+    cleanupFailures.push(error);
+  }
   if (cleanupFailures.length > 0) {
     const cleanupError = new AggregateError(cleanupFailures, 'Release artifact smoke cleanup failed.');
     if (primaryError) {
@@ -784,7 +795,7 @@ async function main() {
 
   if (primaryError) throw primaryError;
 
-  console.log('Release artifact smoke passed: NSIS install/self-test/uninstall cleanup and portable self-test completed without CDP.');
+  console.log('Release artifact smoke passed: NSIS and portable artifacts completed ten real format loads plus the existing security and accessibility evidence without CDP.');
 }
 
 function isDirectExecution() {

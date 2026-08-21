@@ -12,6 +12,7 @@ import {
   DEV_RENDERER_URL,
   PACKAGED_APP_ORIGIN,
   getAppAssetPath,
+  getPackagedContentSecurityPolicy,
   getModelAssetMimeType,
   getModelRoute,
   isAllowedNavigationUrl,
@@ -39,8 +40,10 @@ protocol.registerSchemesAsPrivileged([
 const scanner = new FileScanner();
 const DIST_DIRECTORY = path.join(__dirname, '..', 'dist');
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
+const APP_SESSION_PARTITION = 'nexoip-ephemeral';
 
 let mainWindow = null;
+let applicationSession = null;
 const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
 let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
 const unsafeStartupArguments = app.isPackaged ? findUnsafePackagedArguments(startupArguments) : [];
@@ -190,9 +193,14 @@ function registerIpcHandlers() {
   });
 }
 
-function configureSession() {
-  const currentSession = session.defaultSession;
+function getApplicationSession() {
+  if (!applicationSession) {
+    applicationSession = session.fromPartition(APP_SESSION_PARTITION, { cache: false });
+  }
+  return applicationSession;
+}
 
+function configureSession(currentSession) {
   currentSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   currentSession.setPermissionCheckHandler(() => false);
 
@@ -206,9 +214,7 @@ function configureSession() {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:",
-          ],
+          'Content-Security-Policy': [getPackagedContentSecurityPolicy(new URL(details.url).pathname)],
           'Permissions-Policy': ['camera=(), geolocation=(), microphone=(), payment=(), usb=()'],
           'Referrer-Policy': ['no-referrer'],
           'X-Content-Type-Options': ['nosniff'],
@@ -233,6 +239,7 @@ function hardenWindow(webContents) {
 }
 
 async function createWindow({ show = true } = {}) {
+  const currentSession = getApplicationSession();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
@@ -243,6 +250,7 @@ async function createWindow({ show = true } = {}) {
     autoHideMenuBar: true,
     show,
     webPreferences: {
+      session: currentSession,
       preload: PRELOAD_PATH,
       nodeIntegration: false,
       contextIsolation: true,
@@ -281,8 +289,9 @@ async function runConfiguredPackagedSelfTest() {
 if (startupIsAllowed) {
   app.whenReady().then(async () => {
     try {
-      protocol.handle('nexoip', handleNexoipProtocol);
-      configureSession();
+      const currentSession = getApplicationSession();
+      currentSession.protocol.handle('nexoip', handleNexoipProtocol);
+      configureSession(currentSession);
       registerIpcHandlers();
       await createWindow({ show: !packagedSelfTestRequest });
       if (packagedSelfTestRequest) {

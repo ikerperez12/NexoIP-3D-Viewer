@@ -6,7 +6,12 @@ import { DOMParser } from '@xmldom/xmldom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { MeshoptDecoder as ThreeMeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { disposeModelResources, getBundledLoaderRoot, load3DModel } from '../src/utils/loaders.js';
+import {
+  DEFAULT_MODEL_BUDGET,
+  disposeModelResources,
+  getBundledLoaderRoot,
+  load3DModel
+} from '../src/utils/loaders.js';
 
 const fixtureRoot = path.resolve(fileURLToPath(new URL('./fixtures/format-matrix/', import.meta.url)));
 const fixtureUrlRoot = 'nexoip://app/model/format-matrix/';
@@ -221,7 +226,6 @@ describe('redistributable on-disk format matrix', () => {
 
   it('loads every declared OBJ material library and its local PNG textures', async () => {
     const result = await loadFixture('obj-multimtl/multi-material.obj');
-    await Promise.all(imageLoads);
     const materials = collectMaterials(result.object);
     const materialsByName = new Map(materials.map((material) => [material.name, material]));
 
@@ -240,7 +244,6 @@ describe('redistributable on-disk format matrix', () => {
 
   it('parses the DAE fixture with centimetre scale, Z-up conversion, a texture, and a matrix animation', async () => {
     const result = await loadFixture('dae-up-axis/animated-textured.dae');
-    await Promise.all(imageLoads);
     const [material] = collectMaterials(result.object);
 
     expect(result.object.scale.toArray()).toEqual([0.01, 0.01, 0.01]);
@@ -255,6 +258,14 @@ describe('redistributable on-disk format matrix', () => {
     disposeModelResources(result.object);
   });
 
+  it('waits for local image sidecars before enforcing the decoded texture budget', async () => {
+    await expect(loadFixture('obj-multimtl/multi-material.obj', {
+      budget: { ...DEFAULT_MODEL_BUDGET, maxTexturePixels: 1 }
+    })).rejects.toMatchObject({ code: 'MODEL_BUDGET_TEXTUREPIXELS' });
+    expect(imageLoads.size).toBeGreaterThan(0);
+    await Promise.all(imageLoads);
+  });
+
   it('parses the compact CC0 static FBX fixture', async () => {
     const result = await loadFixture('fbx-static/lantern-pole.fbx');
 
@@ -264,6 +275,17 @@ describe('redistributable on-disk format matrix', () => {
     expect(result.stats.vertices).toBeGreaterThan(0);
     expect(result.animations).toHaveLength(0);
     expect(requestedPaths()).toContain('/model/format-matrix/fbx-static/lantern-pole.fbx');
+    disposeModelResources(result.object);
+  });
+
+  it('parses the authored coloured PLY mesh fixture with its authored normals', async () => {
+    const result = await loadFixture('ply-mesh/colored-triangle.ply');
+
+    expect(result.object.isMesh).toBe(true);
+    expect(result.object.geometry.attributes.color).toBeTruthy();
+    expect(result.object.geometry.attributes.normal.getZ(0)).toBeCloseTo(1);
+    expect(result.stats).toMatchObject({ meshes: 1, vertices: 3, triangles: 1 });
+    expect(requestedPaths()).toContain('/model/format-matrix/ply-mesh/colored-triangle.ply');
     disposeModelResources(result.object);
   });
 

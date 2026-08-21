@@ -31,6 +31,32 @@ describe('server-rendered accessibility contracts', () => {
     expect(markup).toContain('<progress');
   });
 
+  it('bounds a large tree directory and exposes an accessible load-more control', () => {
+    const files = Array.from({ length: 250 }, (_, index) => ({
+      id: `tree-${index}`,
+      name: `tree-entry-${index}.glb`,
+      extension: 'glb'
+    }));
+    const markup = renderToStaticMarkup(
+      <FileLibrarySidebar
+        isOpen
+        files={files}
+        folderTree={{ id: 'library', name: 'Biblioteca local', filesCount: files.length, files, children: [] }}
+        onStartScan={() => undefined}
+        bridgeAvailable
+      />
+    );
+    const treePanel = markup.match(/id="library-[^"]+-panel-tree"[^>]*>([\s\S]*?)<\/div><div id="library-[^"]+-panel-flat"/)?.[1] || '';
+
+    expect(treePanel).toContain('tree-entry-99.glb');
+    expect(treePanel).not.toContain('tree-entry-100.glb');
+    expect(treePanel).toContain('Mostrar 100 elementos');
+    expect(treePanel).toContain('150 restantes');
+    expect(treePanel).toMatch(/aria-controls="library-[^"]+-panel-tree"/);
+    expect(treePanel).toMatch(/aria-describedby="tree-page-/);
+    expect(treePanel).toContain('Mostrando 100 de 250 elementos en Biblioteca local.');
+  });
+
   it('keeps the hidden file input out of the tab order and labels its single trigger', () => {
     const markup = renderToStaticMarkup(<DropZone disabled={false} hasCurrentFile={false} />);
     expect(markup).toContain('type="file"');
