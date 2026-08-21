@@ -935,8 +935,6 @@ export default function App() {
         onRequestClose={() => setSidebarOpen(false)}
         triggerRef={sidebarTriggerRef}
         files={filesList}
-        folderTree={null}
-        catalogV2
         catalogState={catalogState}
         treePages={treePages}
         currentFileId={currentFile?.id}

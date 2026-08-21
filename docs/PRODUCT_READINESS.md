@@ -26,7 +26,7 @@ Export remains alpha. GLB now exports the clean imported clone rather than viewp
 - Navigation, pop-ups, webviews, permissions, remote subresources and production debugging switches are denied.
 - Asset reads are allowlisted, size-bounded, contained after canonicalisation and served without a check-then-reopen race.
 - Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can pass the bounded structural preflight within the per-asset safety policy is discovered under the folders the user explicitly selects; those prechecked entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. Opening an entry still requires the loader's full parse and resource checks. No automatic disk scan, telemetry, analytics, account or network service is introduced.
-- Exact dependencies and immutable GitHub Actions references pass dependency audit, CodeQL and secret scanning.
+- Exact dependencies and immutable GitHub Actions references pass dependency audit, read-only pull-request dependency review, CodeQL and secret scanning.
 - The release SBOM identifies the Electron/Chromium runtime that is actually distributed, and both binaries and SBOM have build provenance.
 - Every NexoIP-owned executable is Authenticode-signed with the expected publisher identity and a trusted timestamp. Runtime PE signatures are inventoried and verified against an explicit vendor policy. `NotSigned` on a project-owned executable is a hard release failure.
 - Signing credentials are available only to a protected GitHub environment after an approved, protected tag is proven to reference the protected main branch.

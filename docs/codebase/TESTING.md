@@ -39,12 +39,13 @@ npm run test:release-artifacts
 - Renderer-independent Three.js loaders use mocked `fetch`, image dimensions and real redistributable assets (`tests/loaders-matrix.test.js`).
 - Electron window/renderer objects are narrow Vitest doubles for restoration and policy tests (`tests/packaged-accessibility.test.js`).
 - Packaged tests use unique profiles and capability files; remote debugging/CDP arguments are expected to be rejected.
+- Static renderer tests cover the accessible root-recovery action independently of model loading (`tests/accessibility-markup.test.jsx`).
 - Common failure mode: static contract assertions can prove wiring but not actual packaged decoding. The real packaged self-test is the required functional counterpart.
 
 ## 5) Coverage and Quality Signals
 
 - Coverage provider + threshold: [TODO] none installed (`npm ls @vitest/coverage-v8 c8 nyc --depth=0` returns empty).
-- Current local evidence for this hardening worktree: 27 suites and 155 tests passed through `npm run check`; the final PR/release commit must rerun the same gate.
+- Current local evidence for this hardening worktree: 28 suites and 154 tests passed through `npm run check`; the final PR/release commit must rerun the same gate.
 - CI additionally builds and runs the packaged Windows smoke; CodeQL runs `security-extended` queries.
 - Known gaps: broader per-format fidelity and malformed corpus, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
 
@@ -55,5 +56,6 @@ npm run test:release-artifacts
 - `playwright.config.mjs`
 - `.github/workflows/ci.yml`
 - `.github/workflows/codeql.yml`
+- `.github/workflows/dependency-review.yml`
 - `tests/loaders-matrix.test.js`
 - `tests/e2e/packaged-app.spec.mjs`

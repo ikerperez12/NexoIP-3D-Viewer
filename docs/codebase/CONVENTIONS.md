@@ -7,7 +7,7 @@
 | React files/components | PascalCase | `Viewport3D.jsx`, `ModelInspector` | `src/components/Viewport3D.jsx:36`, `src/components/ModelInspector.jsx:26` |
 | Utility/module files | lowercase or kebab-case | `camera-controls.js`, `file-scanner.js` | `src/utils/camera-controls.js`, `electron/file-scanner.js` |
 | Functions/variables | camelCase; handlers use `handle*` | `handleStartScan`, `load3DModel` | `src/App.jsx:169`, `src/utils/loaders.js:419` |
-| Classes | PascalCase | `FileScanner`, `ModelBudgetError` | `electron/file-scanner.js:47`, `src/utils/loaders.js:28` |
+| Classes | PascalCase | `FileScanner`, `ModelBudgetError` | `electron/file-scanner.js:343`, `src/utils/loaders.js:28` |
 | Constants | uppercase snake case | `MAX_MODEL_BYTES`, `PACKAGED_APP_ORIGIN` | `electron/file-scanner.js:18`, `electron/security.js:4` |
 
 ## 2) Formatting and Linting

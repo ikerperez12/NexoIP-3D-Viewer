@@ -6,9 +6,9 @@
 | --- | --- | --- | --- | --- | --- |
 | Windows native file dialog | OS capability | Explicitly approve folders for indexing | Local interactive user | High | `electron/main.js:153-162` |
 | Windows Explorer | OS shell capability | Reveal an already registered model | Opaque ID validated in main | Low | `electron/main.js:169-182` |
-| Local filesystem | OS data source | Read approved models and sidecars | User approval plus path/identity checks | High | `electron/file-scanner.js:242-396` |
+| Local filesystem | OS data source | Read approved models and sidecars | User approval plus path/identity checks | High | `electron/file-scanner.js` |
 | Static Basis worker | Local packaged worker | Transcode KTX2/Basis textures without relaxing renderer CSP | Fixed same-origin URL, no bridge, no network | Medium | `src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` |
-| Loopback Vite server | Development-only HTTP | Serve renderer during `npm run dev` | Exact `127.0.0.1:3000` allowlist | Low | `package.json:25`, `electron/security.js:185-219` |
+| Loopback Vite server | Development-only HTTP | Serve renderer during `npm run dev` | Exact `127.0.0.1:3000` allowlist | Low | `package.json:25`, `electron/security.js` |
 | npm registry | Build-time package source | Reproduce dependencies from lockfile | npm client / public packages | High | `package-lock.json`, `.github/workflows/ci.yml:31-32` |
 | GitHub Actions and Releases | Build-time CI/publication | Checks, CodeQL, artifacts, SBOM and provenance | Minimal `GITHUB_TOKEN`, OIDC for attestations | High | `.github/workflows/ci.yml`, `.github/workflows/release.yml` |
 | Official Electron GitHub release | Release-time baseline | Verify packaged Electron PE files against the official archive | Public HTTPS plus official SHA-256 file | High | `.github/workflows/release.yml:115-141` |
@@ -20,7 +20,7 @@ The packaged application itself has no remote API, account, telemetry, analytics
 | Store | Role | Access layer | Key risk | Evidence |
 | --- | --- | --- | --- | --- |
 | In-memory `Map` registry | Current-session model catalog and private paths | `FileScanner` | Catalog is intentionally lost at exit; grows with user-selected roots while each asset remains subject to validation and per-file safety policy | `electron/file-scanner.js`, `electron/security.js` |
-| User-selected model files | Read-only model and sidecar bytes | Verified file descriptors and private protocol | Hostile parser input or later file replacement | `electron/file-scanner.js:328-396` |
+| User-selected model files | Read-only model and sidecar bytes | Verified file descriptors and private protocol | Hostile parser input or later file replacement | `electron/file-scanner.js:#openVerifiedFile` |
 | Temporary smoke directories | Capability config, profiles and diagnostic reports | Test scripts and packaged self-test | Residue if a host/installer fails unexpectedly | `scripts/packaged-smoke.mjs:91-185`, `scripts/release-artifact-smoke.mjs:658-788` |
 
 No database, cache service, browser storage catalog or cloud synchronization is used.
@@ -31,7 +31,7 @@ No database, cache service, browser storage catalog or cloud synchronization is 
 - Stable signing uses `CSC_LINK` and `CSC_KEY_PASSWORD` only in the protected `production-signing` build step; the expected certificate subject is a protected environment variable. The subject is exported only after signature verification so the release notes can state the exact expected public identity.
 - The attestation job has OIDC and attestation permissions but cannot write releases. The later publish job has only `contents: write`, consumes verified artifacts, and independently downloads the reserved draft assets to check their names, sizes, and SHA-256 values before publication.
 - GitHub checkout disables persisted credentials in CI and release builds.
-- Hardcoding checks: Gitleaks and GitHub secret scanning are external gates; repository policy also forbids certificates, `.env` files and credentials (`CONTRIBUTING.md:27`).
+- Hardcoding checks: GitHub secret scanning and push protection are enabled for the public repository; the local release audit additionally runs a redacted pattern/history scan. Gitleaks is not a committed project tool, and repository policy forbids certificates, `.env` files and credentials (`CONTRIBUTING.md:27`).
 - [TODO] Certificate owner, rotation procedure and recovery contact remain undefined until a signing provider is selected.
 
 ## 4) Reliability and Failure Behavior

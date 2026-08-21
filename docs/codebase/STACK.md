@@ -50,7 +50,7 @@ npm run test:release-artifacts
 ## 5) Environment and Config
 
 - Runtime configuration is compiled into `package.json`, `vite.config.mjs`, `electron/security.js` and `electron/startup-policy.js`.
-- `ELECTRON_RENDERER_URL` is development-only and is rejected unless it is exactly `http://127.0.0.1:3000/` (`electron/main.js:263`, `electron/security.js:185`).
+- `ELECTRON_RENDERER_URL` is development-only and is rejected unless it is exactly `http://127.0.0.1:3000/` (`electron/main.js`, `electron/security.js`).
 - Stable release signing expects protected-environment values `CSC_LINK`, `CSC_KEY_PASSWORD` and `NEXOIP_SIGNING_SUBJECT` (`.github/workflows/release.yml:110`, `.github/workflows/release.yml:154`). They are not runtime application settings.
 - The distributed target is Windows 10/11 x64. No container or server deployment exists (`README.md:90`, `package.json:95`).
 - There is no `.env` template because the packaged application has no runtime credentials or remote service configuration.

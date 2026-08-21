@@ -2,6 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import AnimationController from '../src/components/AnimationController.jsx';
+import { AppRecoveryScreen } from '../src/components/AppErrorBoundary.jsx';
 import DropZone from '../src/components/DropZone.jsx';
 import FileLibrarySidebar from '../src/components/FileLibrarySidebar.jsx';
 import ModelInspector from '../src/components/ModelInspector.jsx';
@@ -13,7 +14,15 @@ describe('server-rendered accessibility contracts', () => {
       <FileLibrarySidebar
         isOpen
         files={[]}
-        folderTree={{ id: 'library', files: [], children: [] }}
+        catalogState={{
+          catalogRevision: 1,
+          total: 0,
+          nextCursor: null,
+          filters: { query: '', extension: 'all' },
+          isLoading: false,
+          isLoadingMore: false,
+        }}
+        treePages={{ '__catalog-root__': { items: [], total: 0, nextCursor: null, isLoading: false } }}
         onStartScan={() => undefined}
         onCancelScan={() => undefined}
         scanStatus={{ status: 'scanning', foundModels: 2, scannedDirectories: 4 }}
@@ -32,32 +41,6 @@ describe('server-rendered accessibility contracts', () => {
     expect(markup).toContain('<progress');
   });
 
-  it('bounds a large tree directory and exposes an accessible load-more control', () => {
-    const files = Array.from({ length: 250 }, (_, index) => ({
-      id: `tree-${index}`,
-      name: `tree-entry-${index}.glb`,
-      extension: 'glb'
-    }));
-    const markup = renderToStaticMarkup(
-      <FileLibrarySidebar
-        isOpen
-        files={files}
-        folderTree={{ id: 'library', name: 'Biblioteca local', filesCount: files.length, files, children: [] }}
-        onStartScan={() => undefined}
-        bridgeAvailable
-      />
-    );
-    const treePanel = markup.match(/id="library-[^"]+-panel-tree"[^>]*>([\s\S]*?)<\/div><div id="library-[^"]+-panel-flat"/)?.[1] || '';
-
-    expect(treePanel).toContain('tree-entry-99.glb');
-    expect(treePanel).not.toContain('tree-entry-100.glb');
-    expect(treePanel).toContain('Mostrar 100 elementos');
-    expect(treePanel).toContain('150 restantes');
-    expect(treePanel).toMatch(/aria-controls="library-[^"]+-panel-tree"/);
-    expect(treePanel).toMatch(/aria-describedby="tree-page-/);
-    expect(treePanel).toContain('Mostrando 100 de 250 elementos en Biblioteca local.');
-  });
-
   it('keeps v2 list and tree pagination bounded, labelled, and connected to their result panels', () => {
     const files = Array.from({ length: 100 }, (_, index) => ({
       id: `remote-${index}`,
@@ -67,7 +50,6 @@ describe('server-rendered accessibility contracts', () => {
     const markup = renderToStaticMarkup(
       <FileLibrarySidebar
         isOpen
-        catalogV2
         catalogState={{
           catalogRevision: 8,
           total: 250,
@@ -104,6 +86,15 @@ describe('server-rendered accessibility contracts', () => {
     const markup = renderToStaticMarkup(<Toolbar3D currentIndex={-1} currentIndexKnown={false} totalCount={250} />);
     expect(markup).toContain('—/250');
     expect(markup).toContain('Navegación de modelos, posición no cargada de 250');
+  });
+
+  it('offers an accessible recovery action if the renderer view fails unexpectedly', () => {
+    const markup = renderToStaticMarkup(<AppRecoveryScreen onReload={() => undefined} />);
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain('La vista necesita reiniciarse');
+    expect(markup).toContain('No se ha modificado ningún archivo local.');
+    expect(markup).toContain('Reiniciar vista');
   });
 
   it('keeps the hidden file input out of the tab order and labels its single trigger', () => {

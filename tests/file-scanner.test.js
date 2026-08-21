@@ -648,6 +648,82 @@ test('scanner progressively publishes validated models and prunes stale records 
   });
 });
 
+test('scanner batches dense progressive catalog notifications without hiding the first or final discovery', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const modelCount = 12;
+    await Promise.all(Array.from({ length: modelCount }, (_, index) => (
+      writeValidModel(path.join(directory, `dense-${index}.glb`))
+    )));
+
+    const scanner = new FileScanner({ catalogPublicationIntervalMs: 60_000 });
+    const events = [];
+    scanner.onCatalogChange((event) => events.push(event));
+
+    await expect(scanner.scanDirectories([directory])).resolves.toMatchObject({
+      status: 'completed',
+      count: modelCount,
+    });
+
+    const progressiveDiscoveries = events.filter((event) => event.isScanning && event.modelCount > 0);
+    expect(progressiveDiscoveries).toEqual([expect.objectContaining({ modelCount: 1 })]);
+    expect(events).toHaveLength(3);
+    expect(events.at(-1)).toMatchObject({
+      isScanning: false,
+      status: 'completed',
+      modelCount,
+      catalogRevision: modelCount + 1,
+    });
+  });
+});
+
+test('scanner publishes another bounded snapshot while a long scan is still running', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    await Promise.all([
+      writeValidModel(path.join(directory, 'first.glb')),
+      writeValidModel(path.join(directory, 'second.glb')),
+    ]);
+
+    let releaseEnumeration;
+    let signalEnumerationPaused;
+    const enumerationGate = new Promise((resolve) => { releaseEnumeration = resolve; });
+    const enumerationPaused = new Promise((resolve) => { signalEnumerationPaused = resolve; });
+    const scanner = new FileScanner({
+      catalogPublicationIntervalMs: 15,
+      openDirectory: async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            name: 'first.glb',
+            isSymbolicLink: () => false,
+            isDirectory: () => false,
+            isFile: () => true,
+          };
+          signalEnumerationPaused();
+          await enumerationGate;
+          yield {
+            name: 'second.glb',
+            isSymbolicLink: () => false,
+            isDirectory: () => false,
+            isFile: () => true,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    const events = [];
+    scanner.onCatalogChange((event) => events.push(event));
+
+    const scan = scanner.scanDirectories([directory]);
+    await enumerationPaused;
+    expect(events).toContainEqual(expect.objectContaining({ isScanning: true, modelCount: 1 }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseEnumeration();
+    await expect(scan).resolves.toMatchObject({ status: 'completed', count: 2 });
+
+    expect(events).toContainEqual(expect.objectContaining({ isScanning: true, modelCount: 2 }));
+  });
+});
+
 test('cancelling a scan retains both the prior catalog and safely published discoveries', async () => {
   await withTemporaryLibrary(async (directory) => {
     const previousDirectory = path.join(directory, 'previous');

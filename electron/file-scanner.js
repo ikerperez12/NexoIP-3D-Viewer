@@ -23,6 +23,7 @@ export const MAX_MODEL_BYTES = 256 * 1024 * 1024;
 // fully discoverable, while Electron still needs opportunities to deliver a
 // cancellation request and repaint progress during a very dense directory.
 const SCAN_YIELD_INTERVAL = 128;
+const SCAN_CATALOG_PUBLICATION_INTERVAL_MS = 200;
 const MAX_STRUCTURAL_VALIDATION_BYTES = 256 * 1024;
 const GLB_MAGIC = 0x46546C67;
 const GLB_VERSION = 2;
@@ -340,7 +341,11 @@ function isStructurallyValidModel(filePath, bytes, size) {
 }
 
 export class FileScanner {
-  constructor({ openFile = fs.promises.open, openDirectory = fs.promises.opendir } = {}) {
+  constructor({
+    openFile = fs.promises.open,
+    openDirectory = fs.promises.opendir,
+    catalogPublicationIntervalMs = SCAN_CATALOG_PUBLICATION_INTERVAL_MS,
+  } = {}) {
     this.recordsById = new Map();
     this.idsByPath = new Map();
     this.rootNodesByPath = new Map();
@@ -355,6 +360,10 @@ export class FileScanner {
     this.treeChildOrderCache = null;
     this.openFile = openFile;
     this.openDirectory = openDirectory;
+    this.catalogPublicationIntervalMs = Number.isSafeInteger(catalogPublicationIntervalMs)
+      && catalogPublicationIntervalMs >= 0
+      ? catalogPublicationIntervalMs
+      : SCAN_CATALOG_PUBLICATION_INTERVAL_MS;
     this.isScanning = false;
     this.scanAbortController = null;
     this.scanContext = null;
@@ -399,12 +408,47 @@ export class FileScanner {
     }
   }
 
-  #markCatalogChanged() {
+  #markCatalogChanged({ emit = true } = {}) {
     this.catalogRevision += 1;
     this.catalogOrderCache = null;
     this.treeChildOrderCache = null;
     this.status.catalogRevision = this.catalogRevision;
+    if (emit) this.#emitCatalogChange();
+  }
+
+  #clearPendingScanCatalogPublication(scanContext) {
+    if (scanContext?.catalogPublicationTimer !== null && scanContext?.catalogPublicationTimer !== undefined) {
+      clearTimeout(scanContext.catalogPublicationTimer);
+      scanContext.catalogPublicationTimer = null;
+    }
+    if (scanContext) scanContext.pendingCatalogPublication = false;
+  }
+
+  #flushPendingScanCatalogPublication(scanContext) {
+    if (this.scanContext !== scanContext || !scanContext.pendingCatalogPublication) return;
+    this.#clearPendingScanCatalogPublication(scanContext);
+    scanContext.lastCatalogPublicationAt = Date.now();
     this.#emitCatalogChange();
+  }
+
+  #scheduleScanCatalogPublication(scanContext) {
+    if (this.scanContext !== scanContext) return;
+    scanContext.pendingCatalogPublication = true;
+    const now = Date.now();
+    const lastPublication = scanContext.lastCatalogPublicationAt;
+    const elapsed = lastPublication === null ? Infinity : now - lastPublication;
+    if (elapsed >= this.catalogPublicationIntervalMs) {
+      this.#flushPendingScanCatalogPublication(scanContext);
+      return;
+    }
+
+    if (scanContext.catalogPublicationTimer !== null) return;
+    const delay = Math.max(0, this.catalogPublicationIntervalMs - elapsed);
+    scanContext.catalogPublicationTimer = setTimeout(() => {
+      scanContext.catalogPublicationTimer = null;
+      this.#flushPendingScanCatalogPublication(scanContext);
+    }, delay);
+    scanContext.catalogPublicationTimer.unref?.();
   }
 
   onCatalogChange(listener) {
@@ -572,7 +616,7 @@ export class FileScanner {
       && hasSameFileIdentity(left.identity, right.identity);
   }
 
-  #publishRecord(realPath, stats, rootPath) {
+  #publishRecord(realPath, stats, rootPath, { emitCatalogChange = true } = {}) {
     const previousId = this.idsByPath.get(realPath);
     const previousRecord = previousId ? this.recordsById.get(previousId) : null;
     const reusableId = previousRecord && hasSameFileIdentity(previousRecord.identity, toFileIdentity(stats))
@@ -603,15 +647,19 @@ export class FileScanner {
     this.recordsById.set(record.id, record);
     this.idsByPath.set(realPath, record.id);
     this.#addRecordToTree(record);
-    this.#markCatalogChanged();
+    this.#markCatalogChanged({ emit: emitCatalogChange });
     return record;
   }
 
   #publishScannedRecord(scanContext, realPath, stats, rootPath) {
-    const record = this.#publishRecord(realPath, stats, rootPath);
+    const revisionBeforePublication = this.catalogRevision;
+    const record = this.#publishRecord(realPath, stats, rootPath, { emitCatalogChange: false });
     scanContext.discoveredPaths.add(realPath);
     this.status.foundModels = scanContext.discoveredPaths.size;
     this.status.availableModels = this.recordsById.size;
+    if (this.catalogRevision !== revisionBeforePublication) {
+      this.#scheduleScanCatalogPublication(scanContext);
+    }
     return record;
   }
 
@@ -655,7 +703,7 @@ export class FileScanner {
     this.idsByPath = finalIdsByPath;
     this.status.foundModels = scanContext.discoveredPaths.size;
     this.status.availableModels = this.recordsById.size;
-    if (prunedRecords) this.#markCatalogChanged();
+    if (prunedRecords) this.#markCatalogChanged({ emit: false });
   }
 
   async #validateModelCandidate(realPath, expectedStats) {
@@ -938,6 +986,9 @@ export class FileScanner {
     const scanContext = {
       discoveredPaths: new Set(),
       externalPaths: new Set(),
+      catalogPublicationTimer: null,
+      lastCatalogPublicationAt: null,
+      pendingCatalogPublication: false,
     };
     this.scanContext = scanContext;
 
@@ -962,9 +1013,10 @@ export class FileScanner {
       };
     } catch (error) {
       this.status.status = 'failed';
-      this.#markCatalogChanged();
+      this.#markCatalogChanged({ emit: false });
       throw error;
     } finally {
+      this.#clearPendingScanCatalogPublication(scanContext);
       this.isScanning = false;
       this.scanAbortController = null;
       if (this.scanContext === scanContext) {
@@ -981,7 +1033,10 @@ export class FileScanner {
     }
 
     this.scanAbortController.abort();
-    if (this.scanContext) this.scanContext.cancellationRevisionPublished = true;
+    if (this.scanContext) {
+      this.#clearPendingScanCatalogPublication(this.scanContext);
+      this.scanContext.cancellationRevisionPublished = true;
+    }
     // Invalidate in-flight pages immediately. Files already published remain
     // available, but they are now part of a cancellation snapshot.
     this.#markCatalogChanged();
