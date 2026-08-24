@@ -45,9 +45,9 @@ npm run test:release-artifacts
 ## 5) Coverage and Quality Signals
 
 - Coverage provider + threshold: [TODO] none installed (`npm ls @vitest/coverage-v8 c8 nyc --depth=0` returns empty).
-- Current local evidence for this hardening worktree: 30 suites and 160 tests passed through `npm run check`; focused worker-protocol tests cover channel, capability, schema and single-initialization rejection, export tests round-trip GLB/STL/OBJ through production loaders, and the packaged matrix proves real KTX2 decoding. The final PR/release commit must rerun the same gate.
+- Current local evidence for this hardening worktree: 30 suites and 165 tests passed through `npm run check`; focused worker-protocol tests cover channel, capability, schema and single-initialization rejection, export tests round-trip GLB/STL/OBJ through production loaders, every advertised format has a pinned malformed or geometry-free source-level negative, and the packaged matrix proves real KTX2 decoding. The final PR/release commit must rerun the same gate.
 - CI additionally builds and runs the packaged Windows smoke; CodeQL runs `security-extended` queries.
-- Known gaps: broader per-format fidelity and malformed corpus, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
+- Known gaps: broader per-format fidelity and a packaged hostile-input matrix, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
 
 ## 6) Evidence
 

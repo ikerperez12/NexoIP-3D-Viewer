@@ -901,6 +901,16 @@ function eachObjectIterative(rootObject, visitor) {
   }
 }
 
+function hasRenderableGeometry(rootObject) {
+  let found = false;
+  eachObjectIterative(rootObject, (object) => {
+    if (found || (!object.isMesh && !object.isPoints && !object.isLine)) return;
+    const positions = object.geometry?.getAttribute?.('position');
+    if (Number.isSafeInteger(positions?.count) && positions.count > 0) found = true;
+  });
+  return found;
+}
+
 function collectMaterials(rootObject) {
   const materials = new Set();
   eachObjectIterative(rootObject, (object) => {
@@ -1059,6 +1069,9 @@ export async function load3DModel(url, fileName = '', onProgress, options = {}) 
 
     throwIfAborted(signal);
     if (!sceneGroup?.isObject3D) throw new Error('El archivo no contiene una escena 3D válida.');
+    if (!hasRenderableGeometry(sceneGroup)) {
+      throw new Error('El archivo no contiene geometría 3D que se pueda mostrar.');
+    }
 
     eachObjectIterative(sceneGroup, (child) => {
       if (!child.isMesh && !child.isPoints && !child.isLine) return;

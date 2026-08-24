@@ -33,7 +33,7 @@ Export remains alpha. GLB exports the clean imported clone rather than viewport 
 
 ### 2. Format correctness and resource safety
 
-- Each advertised format has a small, redistributable positive fixture and malformed/unsupported negative fixtures.
+- Each advertised format has a small, redistributable positive fixture. Source-level malformed or geometry-free negatives now cover glTF, OBJ, STL, PLY, FBX and DAE; expand these into a packaged hostile-input matrix before stable.
 - A per-load aggregate source budget bounds streamed model resources and requests (including local sidecars and decoder assets), while a decoded-resource budget covers node depth/count, vertices, triangles, materials, animations, textures and total texture pixels.
 - Oversized, deeply nested, truncated and decompression-heavy inputs fail with a recoverable message rather than leaving stale content or an unusable shell.
 - Loading and scanning can be cancelled. Switching models cannot commit an obsolete load.

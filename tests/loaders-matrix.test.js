@@ -358,4 +358,17 @@ describe('redistributable on-disk format matrix', () => {
       '/model/format-matrix/invalid/missing.mtl'
     ]));
   });
+
+  it.each([
+    'invalid/malformed.obj',
+    'invalid/malformed.stl',
+    'invalid/malformed.ply',
+    'invalid/malformed.fbx',
+    'invalid/malformed.dae',
+  ])('rejects a geometry-free or malformed %s candidate after its full loader parse', async (fixture) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(loadFixture(fixture)).rejects.toThrow();
+  });
 });
