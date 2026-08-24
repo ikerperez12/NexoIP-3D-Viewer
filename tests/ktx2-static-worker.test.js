@@ -36,6 +36,10 @@ test('KTX2 uses a fixed same-origin worker after loading Three resources', async
       this.options = options;
     }
 
+    addEventListener() {}
+
+    terminate() {}
+
     postMessage(message, transfer) {
       workerMessages.push({ message, transfer, worker: this });
     }
@@ -48,9 +52,9 @@ test('KTX2 uses a fixed same-origin worker after loading Three resources', async
   expect(loader.workerPool.setWorkerCreator).toHaveBeenCalledTimes(1);
   expect(revoke).toHaveBeenCalledWith('blob:nexoip-transient');
   const worker = loader.workerPool.setWorkerCreator.mock.calls[0][0]();
-  expect(worker.url).toBe('nexoip://app/basis/ktx2-transcoder-worker.js');
-  expect(worker.options).toEqual({ name: 'nexoip-ktx2-transcoder' });
   expect(workerMessages).toHaveLength(1);
+  expect(workerMessages[0].worker.url).toBe('nexoip://app/basis/ktx2-transcoder-worker.js');
+  expect(workerMessages[0].worker.options).toEqual({ name: 'nexoip-ktx2-transcoder' });
   expect(workerMessages[0].message).toMatchObject({
     type: 'init',
     config: { dxtSupported: true },
@@ -60,8 +64,17 @@ test('KTX2 uses a fixed same-origin worker after loading Three resources', async
       basis: loader.constructor.BasisFormat,
     },
   });
+  expect(workerMessages[0].message.capability).toMatch(/^[0-9a-f]{32}$/);
   expect(workerMessages[0].transfer).toHaveLength(1);
   expect(workerMessages[0].transfer[0]).toBeInstanceOf(ArrayBuffer);
+
+  const transcodeBuffer = new ArrayBuffer(16);
+  worker.postMessage({ type: 'transcode', buffer: transcodeBuffer }, [transcodeBuffer]);
+  expect(workerMessages[1].message).toMatchObject({
+    type: 'transcode',
+    capability: workerMessages[0].message.capability,
+  });
+  expect(workerMessages[1].transfer).toEqual([transcodeBuffer]);
 });
 
 test('KTX2 static worker setup rejects incomplete loader resources', async () => {

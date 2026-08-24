@@ -21,7 +21,7 @@ Generated `dist/`, `release/`, `test-results/`, local `demo_models/` and depende
 - Preload entry: `electron/preload.cjs`, supplied to `BrowserWindow` in `electron/main.js:246`.
 - Renderer entry: `index.html` -> `src/main.jsx` -> `src/App.jsx`.
 - Build/test entry points: the scripts in `package.json:24-38` and the three files under `scripts/`.
-- There is no production server, database process or background service. KTX2 transcoding uses one fixed static same-origin Web Worker; it is not a separate application process and has no bridge or network authority.
+- There is no production server, database process or background service. KTX2 transcoding uses one fixed static same-origin dedicated worker with an authenticated, bounded message protocol; it is not a separate application process and has no bridge or network authority.
 
 ## 3) Module Boundaries
 

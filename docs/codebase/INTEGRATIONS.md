@@ -7,7 +7,7 @@
 | Windows native file dialog | OS capability | Explicitly approve folders for indexing | Local interactive user | High | `electron/main.js:153-162` |
 | Windows Explorer | OS shell capability | Reveal an already registered model | Opaque ID validated in main | Low | `electron/main.js:169-182` |
 | Local filesystem | OS data source | Read approved models and sidecars | User approval plus path/identity checks | High | `electron/file-scanner.js` |
-| Static Basis worker | Local packaged worker | Transcode KTX2/Basis textures without relaxing renderer CSP | Fixed same-origin URL, no bridge, no network | Medium | `src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` |
+| Static Basis worker | Local packaged worker | Transcode KTX2/Basis textures without relaxing renderer CSP | Fixed same-origin URL, per-instance capability, bounded schema, no bridge, no network | Medium | `src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` |
 | Loopback Vite server | Development-only HTTP | Serve renderer during `npm run dev` | Exact `127.0.0.1:3000` allowlist | Low | `package.json:25`, `electron/security.js` |
 | npm registry | Build-time package source | Reproduce dependencies from lockfile | npm client / public packages | High | `package-lock.json`, `.github/workflows/ci.yml:31-32` |
 | GitHub Actions and Releases | Build-time CI/publication | Checks, CodeQL, artifacts, SBOM and provenance | Minimal `GITHUB_TOKEN`, OIDC for attestations | High | `.github/workflows/ci.yml`, `.github/workflows/release.yml` |

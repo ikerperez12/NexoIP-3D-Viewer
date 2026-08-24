@@ -16,7 +16,7 @@
 | Debt item | Why it exists | Where | Risk if ignored | Suggested fix |
 | --- | --- | --- | --- | --- |
 | Large multi-responsibility modules | Rapid hardening consolidated lifecycle and verification logic | `scripts/release-artifact-smoke.mjs` (737 lines), `Viewport3D.jsx` (660), `loaders.js` (549), `packaged-self-test.js` (541), `App.jsx` (501) | Higher review cost and regression coupling | Extract pure policy/probe modules only when tests can preserve behavior |
-| Legacy Basis dynamic-code requirement | The upstream Basis wrapper uses `new Function` | `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` | A broad CSP exception would weaken the renderer boundary | Keep the exception limited to the fixed static worker; regression-test its CSP and runtime loading |
+| Legacy Basis dynamic-code requirement | The upstream Basis wrapper uses `new Function` | `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` | A broad CSP exception would weaken the renderer boundary | Keep the exception limited to the fixed static worker; preserve its capability/schema checks and regression-test CSP plus real packaged decoding |
 | Session-only catalog | Privacy-first registry intentionally avoids persistence | `electron/file-scanner.js:49-56`, `docs/ARCHITECTURE.md:37` | Users must reselect folders each launch | [ASK USER] Decide whether an opt-in, path-protected persisted library is desirable |
 | Spanish-only product strings | Initial product surface targets Spanish while repository docs are bilingual | `index.html:2`, `src/App.jsx` | English Windows users receive Spanish application messages | [ASK USER] Define supported UI locales before extracting resources |
 

@@ -1,5 +1,11 @@
 const STATIC_KTX2_WORKER_FILE = 'ktx2-transcoder-worker.js';
 
+function createWorkerCapability() {
+  const bytes = new Uint32Array(4);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(8, '0')).join('');
+}
+
 function hasWorkerPool(loader) {
   return loader
     && typeof loader.init === 'function'
@@ -44,14 +50,22 @@ export function configureKtx2StaticWorker(ktx2Loader, basisRoot) {
     const transientBlobUrl = this.workerSourceURL;
     this.workerPool.setWorkerCreator(() => {
       const worker = new Worker(workerUrl, { name: 'nexoip-ktx2-transcoder' });
+      const capability = createWorkerCapability();
+      const authenticatedWorker = {
+        addEventListener: worker.addEventListener.bind(worker),
+        terminate: worker.terminate.bind(worker),
+        postMessage(message, transfer) {
+          worker.postMessage({ ...message, capability }, transfer);
+        },
+      };
       const transcoderBinary = this.transcoderBinary.slice(0);
-      worker.postMessage({
+      authenticatedWorker.postMessage({
         type: 'init',
         config: this.workerConfig,
         constants: workerConstants,
         transcoderBinary,
       }, [transcoderBinary]);
-      return worker;
+      return authenticatedWorker;
     });
 
     if (transientBlobUrl) URL.revokeObjectURL(transientBlobUrl);

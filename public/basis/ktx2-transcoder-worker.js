@@ -15,6 +15,10 @@ let config = null;
 let constants = null;
 let basisModule = null;
 let transcoderPending = null;
+let capability = null;
+
+const MAX_TRANSCODE_BYTES = 256 * 1024 * 1024;
+const CAPABILITY_PATTERN = /^[0-9a-f]{32}$/;
 
 try {
   importScripts('./basis_transcoder.js');
@@ -28,12 +32,24 @@ function fail(id, message) {
 }
 
 function initialize(message) {
-  if (bootstrapError) return;
-  if (!message?.config || !message?.constants || !(message.transcoderBinary instanceof ArrayBuffer)) {
+  if (bootstrapError || capability !== null) return;
+  if (
+    !message?.config
+    || typeof message.config !== 'object'
+    || Array.isArray(message.config)
+    || !message?.constants
+    || typeof message.constants !== 'object'
+    || Array.isArray(message.constants)
+    || !CAPABILITY_PATTERN.test(message.capability)
+    || !(message.transcoderBinary instanceof ArrayBuffer)
+    || message.transcoderBinary.byteLength === 0
+    || message.transcoderBinary.byteLength > MAX_TRANSCODE_BYTES
+  ) {
     bootstrapError = 'Basis transcoder initialization failed.';
     return;
   }
 
+  capability = message.capability;
   config = message.config;
   constants = message.constants;
   if (!constants.engine || !constants.transcoder || !constants.basis) {
@@ -204,12 +220,27 @@ function transcode(buffer) {
 }
 
 self.addEventListener('message', (event) => {
+  // Dedicated workers receive messages only from their creating Worker object.
+  // Unlike cross-document postMessage, their MessageEvent has no origin value;
+  // reject anything that does not match that channel invariant.
+  if (event.origin !== '') return;
+
   const message = event.data;
   if (message?.type === 'init') {
     initialize(message);
     return;
   }
   if (message?.type !== 'transcode') return;
+  if (
+    capability === null
+    || message.capability !== capability
+    || !(message.buffer instanceof ArrayBuffer)
+    || message.buffer.byteLength === 0
+    || message.buffer.byteLength > MAX_TRANSCODE_BYTES
+  ) {
+    fail(message.id, 'Invalid KTX2 transcoding request.');
+    return;
+  }
   if (bootstrapError || !transcoderPending) {
     fail(message.id, bootstrapError || 'Basis transcoder is not initialized.');
     return;

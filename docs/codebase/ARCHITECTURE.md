@@ -26,7 +26,7 @@ native folder picker or dropped File
 5. The renderer requests revisioned catalog/tree pages and metadata-only change notifications through the same validated capability boundary. The first validated discovery publishes immediately; dense follow-up notices are coalesced to at most one every 200 ms before the final snapshot, so it never receives a native path or a full-library refresh (`electron/main.js`, `electron/preload.cjs`, `electron/file-scanner.js`).
 6. The private protocol resolves an ID, opens an identity-checked descriptor and streams it with a safe MIME type (`electron/main.js`, `electron/file-scanner.js`).
 7. `load3DModel` blocks remote sidecars, supports cancellation, applies per-load source/request and decoded-resource budgets, and returns a clean export clone (`src/utils/loaders.js`).
-8. KTX2/Basis keeps the renderer CSP strict: a fixed same-origin static worker receives the legacy dynamic-code exception, has no network or bridge access, and returns only transcoded texture data (`src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js`).
+8. KTX2/Basis keeps the renderer CSP strict: a fixed same-origin dedicated worker receives the legacy dynamic-code exception, has no network or bridge access, authenticates every request with a per-worker cryptographic capability, bounds input buffers, and returns only transcoded texture data (`src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js`).
 9. A root renderer boundary replaces an unexpected component failure with an accessible restart action without exposing local-model details (`src/main.jsx`, `src/components/AppErrorBoundary.jsx`).
 
 ## 3) Layer/Module Responsibilities
@@ -53,7 +53,7 @@ native folder picker or dropped File
 | Open-and-verify handle | `electron/file-scanner.js:#openVerifiedFile` | Prevents serving a path swapped after validation |
 | AbortController / stale-result rejection | `electron/file-scanner.js:201`, `src/components/Viewport3D.jsx:381` | Makes scans and model switches cancellable |
 | Dynamic loader/exporter imports | `src/utils/loaders.js:154`, `src/App.jsx:325` | Keeps format-specific code out of the initial renderer path |
-| Least-privilege legacy worker | `src/utils/ktx2-static-worker.js`, `electron/security.js` | Limits Basis' required `unsafe-eval` to one static worker response rather than the renderer |
+| Least-privilege legacy worker | `src/utils/ktx2-static-worker.js`, `public/basis/ktx2-transcoder-worker.js`, `electron/security.js` | Limits Basis' required `unsafe-eval` to one static worker response; a per-instance capability and strict message schema protect its dedicated channel |
 | Root recovery boundary | `src/main.jsx`, `src/components/AppErrorBoundary.jsx` | Keeps an unexpected renderer error actionable without surfacing private paths |
 
 ## 5) Known Architectural Risks
