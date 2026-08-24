@@ -15,7 +15,7 @@ This document is the release contract for the first stable version. A green buil
 | PLY | Packaged authored coloured mesh with normals; in-memory point-cloud coverage. | Packaged point-cloud and malformed fixtures. |
 | DAE | Packaged centimetre-scale, Z-up, textured and matrix-animated fixture. | Broader unit/up-axis and supported local-texture corpus. |
 
-Export remains alpha. GLB now exports the clean imported clone rather than viewport material/camera mutations, includes hidden source nodes, and preserves animation clips in a round-trip unit test. STL and OBJ intentionally preserve geometry only; cross-format export fidelity still needs its own curated regression corpus.
+Export remains alpha. GLB exports the clean imported clone rather than viewport material/camera mutations, includes hidden source nodes, and preserves animation clips in a round-trip unit test. Binary STL and OBJ quick exports now also round-trip through their production loaders with transformed geometry intact. STL and OBJ intentionally preserve geometry only; broader cross-format fidelity still needs its own curated regression corpus.
 
 ## Stable release gates
 

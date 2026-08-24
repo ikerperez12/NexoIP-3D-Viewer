@@ -28,7 +28,7 @@ npm run test:release-artifacts
 | Scope | Covered? | Typical target | Notes |
 | --- | --- | --- | --- |
 | Unit | Yes | URL/path validation, camera helpers, budgets, UI helpers | Runs in Vitest Node environment |
-| Integration | Yes | FileScanner with real temp files, real Three.js loaders, release-script cleanup | Some browser primitives are mocked for Node |
+| Integration | Yes | FileScanner with real temp files, real Three.js loaders, GLB/STL/OBJ export round trips, release-script cleanup | Some browser primitives are mocked for Node |
 | Packaged smoke | Yes, targeted | Real Electron executable, fuses, local origin, preload, protocol, runtime files, 900x600/200% invariants and ten real format loads | Covers a representative GLB, glTF, OBJ, STL, FBX, PLY and DAE path plus Meshopt, Draco and KTX2; not full format-fidelity certification |
 | Installer/portable | Yes, guarded host | NSIS install, capability test, uninstall and portable | Not a clean Windows profile matrix |
 | Full WCAG / GPU endurance | No | Assistive technology, Windows scaling and repeated GPU lifecycle | Required before stable release |
@@ -45,7 +45,7 @@ npm run test:release-artifacts
 ## 5) Coverage and Quality Signals
 
 - Coverage provider + threshold: [TODO] none installed (`npm ls @vitest/coverage-v8 c8 nyc --depth=0` returns empty).
-- Current local evidence for this hardening worktree: 29 suites and 157 tests passed through `npm run check`; focused worker-protocol tests cover channel, capability, schema and single-initialization rejection, while the packaged matrix proves real KTX2 decoding. The final PR/release commit must rerun the same gate.
+- Current local evidence for this hardening worktree: 30 suites and 160 tests passed through `npm run check`; focused worker-protocol tests cover channel, capability, schema and single-initialization rejection, export tests round-trip GLB/STL/OBJ through production loaders, and the packaged matrix proves real KTX2 decoding. The final PR/release commit must rerun the same gate.
 - CI additionally builds and runs the packaged Windows smoke; CodeQL runs `security-extended` queries.
 - Known gaps: broader per-format fidelity and malformed corpus, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
 

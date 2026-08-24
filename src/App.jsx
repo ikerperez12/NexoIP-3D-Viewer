@@ -5,7 +5,7 @@ import AnimationController from './components/AnimationController.jsx';
 import FileLibrarySidebar from './components/FileLibrarySidebar.jsx';
 import DropZone from './components/DropZone.jsx';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
-import { exportModelAsGlb } from './utils/exporters.js';
+import { exportModelAsGlb, exportModelAsObj, exportModelAsStl } from './utils/exporters.js';
 import {
   CATALOG_PAGE_LIMIT,
   CATALOG_TREE_ROOT_PAGE_KEY,
@@ -823,13 +823,11 @@ export default function App() {
     setIsExporting(true);
     try {
       if (format === 'stl') {
-        const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
-        const result = new STLExporter().parse(exportObject, { binary: true });
+        const result = await exportModelAsStl(exportObject);
         downloadBlob(new Blob([result], { type: 'application/octet-stream' }), `${name}.stl`);
         showToast(`Geometría original exportada como ${name}.stl. Este formato no conserva materiales ni animaciones.`);
       } else if (format === 'obj') {
-        const { OBJExporter } = await import('three/examples/jsm/exporters/OBJExporter.js');
-        const result = new OBJExporter().parse(exportObject);
+        const result = await exportModelAsObj(exportObject);
         downloadBlob(new Blob([result], { type: 'text/plain' }), `${name}.obj`);
         showToast(`Geometría original exportada como ${name}.obj. Las texturas no se incluyen en este archivo.`);
       } else if (format === 'glb') {
