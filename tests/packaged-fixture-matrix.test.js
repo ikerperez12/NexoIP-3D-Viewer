@@ -13,6 +13,7 @@ import {
   assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionFiles,
   assertPackagedRejectionMatrixReport,
+  assertPackagedStaleLoadCancellationReport,
   assertPackagedWebglRecoveryReport,
   createAnimatedTriangleGlb,
   preparePackagedFixtureMatrix,
@@ -64,6 +65,16 @@ function createPassingReport() {
         dialogClosed: true,
         contextHealthy: true,
       },
+      staleLoadCancellation: {
+        delayInstalled: true,
+        delayedRequestObserved: true,
+        winningModelLoaded: true,
+        delayedRequestReleased: true,
+        winningModelRemained: true,
+        loadingSettled: true,
+        dialogClosed: true,
+        contextHealthy: true,
+      },
     },
   };
 }
@@ -108,6 +119,7 @@ test('packaged fixture report accepts complete real-load evidence without local 
   expect(() => assertPackagedRejectionMatrixReport(report, 'Test artifact')).not.toThrow();
   expect(() => assertPackagedLoaderRejectionMatrixReport(report, 'Test artifact')).not.toThrow();
   expect(() => assertPackagedWebglRecoveryReport(report, 'Test artifact')).not.toThrow();
+  expect(() => assertPackagedStaleLoadCancellationReport(report, 'Test artifact')).not.toThrow();
   expect(JSON.stringify(report.checks.formatMatrix)).not.toContain('fixturePath');
   expect(JSON.stringify(report.checks.rejectedFormatMatrix)).not.toContain('fixturePath');
   expect(JSON.stringify(report.checks.loaderRejectedFormatMatrix)).not.toContain('fixturePath');
@@ -171,4 +183,16 @@ test('packaged WebGL recovery report requires a replaced healthy context without
   diagnosticLeak.checks.webglRecovery.modelId = 'a'.repeat(48);
   expect(() => assertPackagedWebglRecoveryReport(diagnosticLeak, 'Test artifact'))
     .toThrow('unnecessary WebGL recovery diagnostics');
+});
+
+test('packaged stale-load report requires a lasting winner without identifiers', () => {
+  const incomplete = createPassingReport();
+  incomplete.checks.staleLoadCancellation.winningModelRemained = false;
+  expect(() => assertPackagedStaleLoadCancellationReport(incomplete, 'Test artifact'))
+    .toThrow('complete packaged stale-load cancellation evidence');
+
+  const diagnosticLeak = createPassingReport();
+  diagnosticLeak.checks.staleLoadCancellation.modelId = 'a'.repeat(48);
+  expect(() => assertPackagedStaleLoadCancellationReport(diagnosticLeak, 'Test artifact'))
+    .toThrow('unnecessary stale-load diagnostics');
 });

@@ -482,6 +482,137 @@ async function probeRendererModelLoad(renderer, model, expectedSize, { prepareSc
   return result;
 }
 
+async function probeRendererStaleLoadCancellation(renderer, delayedModel, winningModel) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot exercise stale model-load cancellation.');
+  }
+
+  let delayInstalled = false;
+  try {
+    delayInstalled = await renderer.executeJavaScript(`(() => {
+      if (!window.nexoip || typeof window.nexoip.getModelUrl !== 'function') return false;
+      const delayedUrl = window.nexoip.getModelUrl(${JSON.stringify(delayedModel.id)});
+      const originalFetch = window.fetch;
+      if (typeof delayedUrl !== 'string' || typeof originalFetch !== 'function') return false;
+      const state = {
+        intercepted: false,
+        released: false,
+        release: null,
+        cleanup() {
+          window.fetch = originalFetch;
+          delete window.__nexoipPackagedSwitchProbe;
+        },
+      };
+      window.__nexoipPackagedSwitchProbe = state;
+      window.fetch = function packagedStaleLoadFetch(input, init) {
+        const requestUrl = typeof input === 'string' ? input : input?.url;
+        if (!state.intercepted && requestUrl === delayedUrl) {
+          state.intercepted = true;
+          return new Promise((resolve, reject) => {
+            state.release = () => {
+              if (state.released) return;
+              state.released = true;
+              Reflect.apply(originalFetch, window, [input, init]).then(resolve, reject);
+            };
+          });
+        }
+        return Reflect.apply(originalFetch, window, [input, init]);
+      };
+      return true;
+    })()`);
+    if (delayInstalled !== true) {
+      throw new Error('The packaged stale-load delay could not be installed.');
+    }
+
+    renderer.send('nexoip:model-opened', delayedModel);
+    const intercepted = await renderer.executeJavaScript(`(async () => {
+      const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+      while (performance.now() < deadline) {
+        if (window.__nexoipPackagedSwitchProbe?.intercepted === true) return true;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return false;
+    })()`);
+    if (intercepted !== true) {
+      throw new Error('The packaged stale model load did not reach its controlled fetch delay.');
+    }
+
+    renderer.send('nexoip:model-opened', winningModel);
+    const result = await renderer.executeJavaScript(`(async () => {
+      const expectedModelId = ${JSON.stringify(winningModel.id)};
+      const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+      let winningModelLoaded = false;
+      while (performance.now() < deadline) {
+        const container = document.querySelector('[data-viewport-controls]');
+        winningModelLoaded = container?.dataset?.loadedModelId === expectedModelId
+          && container?.dataset?.loadedRendererGeneration === container?.dataset?.rendererGeneration
+          && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId
+          && !Array.from(document.querySelectorAll('[role="status"]'))
+            .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+        if (winningModelLoaded) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const state = window.__nexoipPackagedSwitchProbe;
+      const delayedRequestObserved = state?.intercepted === true;
+      const delayedRequestReleased = typeof state?.release === 'function';
+      state?.release?.();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const container = document.querySelector('[data-viewport-controls]');
+      const canvas = container?.querySelector('canvas');
+      let context = null;
+      if (canvas instanceof HTMLCanvasElement) {
+        try {
+          context = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        } catch {
+          context = null;
+        }
+      }
+      const winningModelRemained = container?.dataset?.loadedModelId === expectedModelId
+        && container?.dataset?.loadedRendererGeneration === container?.dataset?.rendererGeneration
+        && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId;
+      const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+        .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+      const dialogClosed = !document.querySelector('dialog[open]');
+      const contextHealthy = Boolean(context)
+        && (typeof context.isContextLost !== 'function' || context.isContextLost() === false);
+      state?.cleanup?.();
+      return {
+        delayInstalled: true,
+        delayedRequestObserved,
+        winningModelLoaded,
+        delayedRequestReleased,
+        winningModelRemained,
+        loadingSettled,
+        dialogClosed,
+        contextHealthy,
+      };
+    })()`);
+
+    const valid = result?.delayInstalled === true
+      && result.delayedRequestObserved === true
+      && result.winningModelLoaded === true
+      && result.delayedRequestReleased === true
+      && result.winningModelRemained === true
+      && result.loadingSettled === true
+      && result.dialogClosed === true
+      && result.contextHealthy === true;
+    if (!valid) {
+      throw new Error('The packaged renderer did not provide complete stale-load cancellation evidence.');
+    }
+    return result;
+  } catch (error) {
+    if (delayInstalled) {
+      await renderer.executeJavaScript(`(() => {
+        window.__nexoipPackagedSwitchProbe?.release?.();
+        window.__nexoipPackagedSwitchProbe?.cleanup?.();
+      })()`).catch(() => undefined);
+    }
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged stale-load cancellation probe failed.', { cause: error });
+  }
+}
+
 async function probeRendererContextRecovery(renderer, model) {
   if (typeof renderer?.executeJavaScript !== 'function') {
     throw new Error('The packaged self-test cannot exercise WebGL recovery.');
@@ -1128,7 +1259,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     const rejectedFormatMatrix = [];
     const loaderRejectedFormatMatrix = [];
     let totalModelBytes = 0;
-    let lastLoadedModel = null;
+    const loadedModels = [];
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
       formatMatrix,
@@ -1227,7 +1358,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
         throw new Error(`Packaged format fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`, { cause: error });
       }
       totalModelBytes += modelLoad.modelBytes;
-      lastLoadedModel = model;
+      loadedModels.push(model);
       formatMatrix.push({
         name: model.name,
         extension: path.extname(model.name).slice(1).toLowerCase(),
@@ -1247,10 +1378,16 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       report.checks.preloadContract.modelCount = formatMatrix.length;
       report.checks.preloadContract.totalModelBytes = totalModelBytes;
     }
-    if (!lastLoadedModel) {
-      throw new Error('The packaged WebGL recovery probe has no loaded model.');
+    if (loadedModels.length >= 2) {
+      report.checks.staleLoadCancellation = await probeRendererStaleLoadCancellation(
+        renderer,
+        loadedModels[0],
+        loadedModels.at(-1),
+      );
+    } else {
+      report.checks.staleLoadCancellation = { tested: false, reason: 'insufficient-fixtures' };
     }
-    report.checks.webglRecovery = await probeRendererContextRecovery(renderer, lastLoadedModel);
+    report.checks.webglRecovery = await probeRendererContextRecovery(renderer, loadedModels.at(-1));
     for (let fixtureIndex = 0; fixtureIndex < loaderRejectionFixturePaths.length; fixtureIndex += 1) {
       const fixturePath = loaderRejectionFixturePaths[fixtureIndex];
       let fixtureStats;

@@ -322,6 +322,26 @@ export function assertPackagedWebglRecoveryReport(report, artifactLabel = 'Packa
   }
 }
 
+export function assertPackagedStaleLoadCancellationReport(report, artifactLabel = 'Packaged application') {
+  const cancellation = report?.checks?.staleLoadCancellation;
+  const valid = cancellation?.delayInstalled === true
+    && cancellation?.delayedRequestObserved === true
+    && cancellation?.winningModelLoaded === true
+    && cancellation?.delayedRequestReleased === true
+    && cancellation?.winningModelRemained === true
+    && cancellation?.loadingSettled === true
+    && cancellation?.dialogClosed === true
+    && cancellation?.contextHealthy === true;
+  if (!valid) {
+    throw new Error(`${artifactLabel} did not provide complete packaged stale-load cancellation evidence.`);
+  }
+  if (Object.hasOwn(cancellation, 'path')
+    || Object.hasOwn(cancellation, 'modelId')
+    || Object.hasOwn(cancellation, 'errorMessage')) {
+    throw new Error(`${artifactLabel} exposed unnecessary stale-load diagnostics.`);
+  }
+}
+
 export function assertPackagedFixtureMatrixReport(report, artifactLabel = 'Packaged application') {
   const actualMatrix = report?.checks?.formatMatrix;
   if (!Array.isArray(actualMatrix) || actualMatrix.length !== PACKAGED_FIXTURE_MATRIX.length) {

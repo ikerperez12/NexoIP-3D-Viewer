@@ -97,6 +97,22 @@ function createPassingSelfTestHarness(fixturePath, capturePage) {
     setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
     send: vi.fn(),
     executeJavaScript: vi.fn(async (source) => {
+      if (source.includes('packagedStaleLoadFetch')) return true;
+      if (source.includes('return false;') && source.includes('__nexoipPackagedSwitchProbe?.intercepted')) {
+        return true;
+      }
+      if (source.includes('winningModelRemained')) {
+        return {
+          delayInstalled: true,
+          delayedRequestObserved: true,
+          winningModelLoaded: true,
+          delayedRequestReleased: true,
+          winningModelRemained: true,
+          loadingSettled: true,
+          dialogClosed: true,
+          contextHealthy: true,
+        };
+      }
       if (source.includes('webglcontextlost')) {
         return {
           lossEventPrevented: true,
@@ -124,7 +140,8 @@ function createPassingSelfTestHarness(fixturePath, capturePage) {
       }
       if (source.includes('data-loaded-model-id')) {
         modelLoadObserved = true;
-        const size = (await fs.promises.stat(fixturePath)).size;
+        const sizeMatch = source.match(/const expectedSize = (\d+);/);
+        const size = sizeMatch ? Number(sizeMatch[1]) : (await fs.promises.stat(fixturePath)).size;
         return {
           bridgeAvailable: true,
           modelBytes: size,
@@ -347,6 +364,39 @@ test('packaged self-test records a replaced and healthy WebGL generation', async
   });
   expect(harness.renderer.executeJavaScript.mock.calls.some(([source]) => (
     source.includes('webglcontextlost') && source.includes('Recuperar vista')
+  ))).toBe(true);
+});
+
+test('packaged self-test proves that a delayed obsolete load cannot replace the winning model', async () => {
+  const firstFixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const winningFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'ply-mesh',
+    'colored-triangle.ply',
+  );
+  const harness = createPassingSelfTestHarness(firstFixturePath);
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: { fixturePaths: [firstFixturePath, winningFixturePath] },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.staleLoadCancellation).toEqual({
+    delayInstalled: true,
+    delayedRequestObserved: true,
+    winningModelLoaded: true,
+    delayedRequestReleased: true,
+    winningModelRemained: true,
+    loadingSettled: true,
+    dialogClosed: true,
+    contextHealthy: true,
+  });
+  expect(harness.renderer.send).toHaveBeenCalledTimes(4);
+  expect(harness.renderer.executeJavaScript.mock.calls.some(([source]) => (
+    source.includes('packagedStaleLoadFetch')
   ))).toBe(true);
 });
 

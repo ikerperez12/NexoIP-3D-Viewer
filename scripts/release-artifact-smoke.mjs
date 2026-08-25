@@ -8,6 +8,7 @@ import {
   assertPackagedFixtureMatrixReport,
   assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionMatrixReport,
+  assertPackagedStaleLoadCancellationReport,
   assertPackagedWebglRecoveryReport,
   preparePackagedFixtureMatrix,
 } from './packaged-fixture-matrix.mjs';
@@ -348,6 +349,7 @@ async function runCapabilitySelfTest({
     assertPackagedFixtureMatrixReport(report, artifactLabel);
     assertPackagedRejectionMatrixReport(report, artifactLabel);
     assertPackagedLoaderRejectionMatrixReport(report, artifactLabel);
+    assertPackagedStaleLoadCancellationReport(report, artifactLabel);
     assertPackagedWebglRecoveryReport(report, artifactLabel);
     assert(report.checks?.preloadContract?.available === true,
       `${artifactLabel} self-test did not expose the expected preload bridge.`);
@@ -828,7 +830,7 @@ async function main() {
 
   if (primaryError) throw primaryError;
 
-  console.log('Release artifact smoke passed: NSIS and portable artifacts completed ten real format loads, six hostile pre-publication rejections, one recoverable missing-dependency rejection, controlled WebGL recovery, and the existing security and accessibility evidence without CDP.');
+  console.log('Release artifact smoke passed: NSIS and portable artifacts completed ten real format loads, six hostile pre-publication rejections, one recoverable missing-dependency rejection, stale-load cancellation, controlled WebGL recovery, and the existing security and accessibility evidence without CDP.');
 }
 
 function isDirectExecution() {
