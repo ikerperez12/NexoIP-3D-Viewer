@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertPackagedFixtureMatrixReport,
+  assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionMatrixReport,
   preparePackagedFixtureMatrix,
 } from './packaged-fixture-matrix.mjs';
@@ -274,7 +275,12 @@ async function waitForAbsence(filePath, timeoutMs, label) {
   throw new Error(`${label} did not remove ${filePath}.`);
 }
 
-function createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixturePaths) {
+function createSelfTestCapability(
+  profileDirectory,
+  fixturePaths,
+  rejectedFixturePaths,
+  loaderRejectionFixturePaths,
+) {
   const token = randomBytes(32).toString('hex');
   const tokenDigest = createHash('sha256').update(token).digest('hex');
   const nonce = randomBytes(16).toString('hex');
@@ -286,6 +292,7 @@ function createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixtur
     token,
     fixturePaths,
     rejectedFixturePaths,
+    loaderRejectionFixturePaths,
     resultPath,
   })}\n`, { encoding: 'utf8', mode: 0o600 });
 
@@ -307,9 +314,15 @@ async function runCapabilitySelfTest({
   temporaryDirectory,
   fixturePaths,
   rejectedFixturePaths,
+  loaderRejectionFixturePaths,
 }) {
   fs.mkdirSync(profileDirectory, { recursive: true });
-  const capability = createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixturePaths);
+  const capability = createSelfTestCapability(
+    profileDirectory,
+    fixturePaths,
+    rejectedFixturePaths,
+    loaderRejectionFixturePaths,
+  );
   const launched = startProcess(executablePath, [
     `--nexoip-self-test=${capability.configPath}`,
     `--nexoip-self-test-token-sha256=${capability.tokenDigest}`,
@@ -333,6 +346,7 @@ async function runCapabilitySelfTest({
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', `${artifactLabel} renderer title was unexpected.`);
     assertPackagedFixtureMatrixReport(report, artifactLabel);
     assertPackagedRejectionMatrixReport(report, artifactLabel);
+    assertPackagedLoaderRejectionMatrixReport(report, artifactLabel);
     assert(report.checks?.preloadContract?.available === true,
       `${artifactLabel} self-test did not expose the expected preload bridge.`);
     assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
@@ -698,6 +712,8 @@ async function main() {
   const fixtureMatrix = await preparePackagedFixtureMatrix(REPOSITORY_DIRECTORY);
   const fixturePaths = fixtureMatrix.fixtures.map((fixture) => fixture.fixturePath);
   const rejectedFixturePaths = fixtureMatrix.rejectedFixtures.map((fixture) => fixture.fixturePath);
+  const loaderRejectionFixturePaths = fixtureMatrix.loaderRejectedFixtures
+    .map((fixture) => fixture.fixturePath);
 
   let primaryError;
   let nsisInstallationNeedsCleanup = false;
@@ -727,6 +743,7 @@ async function main() {
       temporaryDirectory: installerTemporaryDirectory,
       fixturePaths,
       rejectedFixturePaths,
+      loaderRejectionFixturePaths,
     });
 
     uninstallerAttempted = true;
@@ -746,6 +763,7 @@ async function main() {
       temporaryDirectory: portableTemporaryDirectory,
       fixturePaths,
       rejectedFixturePaths,
+      loaderRejectionFixturePaths,
     });
     logDiagnostic('Portable artifact completed the same capability self-test without CDP.');
   } catch (error) {
@@ -808,7 +826,7 @@ async function main() {
 
   if (primaryError) throw primaryError;
 
-  console.log('Release artifact smoke passed: NSIS and portable artifacts completed ten real format loads, six hostile pre-publication rejections, and the existing security and accessibility evidence without CDP.');
+  console.log('Release artifact smoke passed: NSIS and portable artifacts completed ten real format loads, six hostile pre-publication rejections, one recoverable missing-dependency rejection, and the existing security and accessibility evidence without CDP.');
 }
 
 function isDirectExecution() {

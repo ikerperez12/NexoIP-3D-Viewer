@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertPackagedFixtureMatrixReport,
+  assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionMatrixReport,
   preparePackagedFixtureMatrix,
 } from './packaged-fixture-matrix.mjs';
@@ -163,7 +164,12 @@ async function pollForFile(filePath, observer, deadline, label) {
   throw new Error(`${label} timed out after ${TIMEOUT_MS} ms.`);
 }
 
-function createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixturePaths) {
+function createSelfTestCapability(
+  profileDirectory,
+  fixturePaths,
+  rejectedFixturePaths,
+  loaderRejectionFixturePaths,
+) {
   const token = randomBytes(32).toString('hex');
   const tokenDigest = createHash('sha256').update(token).digest('hex');
   const nonce = randomBytes(16).toString('hex');
@@ -174,6 +180,7 @@ function createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixtur
     token,
     fixturePaths,
     rejectedFixturePaths,
+    loaderRejectionFixturePaths,
     resultPath,
   })}\n`, { encoding: 'utf8', mode: 0o600 });
   return { configPath, resultPath, tokenDigest };
@@ -212,8 +219,18 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
   }
 }
 
-async function runPackagedSelfTest(profileDirectory, fixturePaths, rejectedFixturePaths) {
-  const capability = createSelfTestCapability(profileDirectory, fixturePaths, rejectedFixturePaths);
+async function runPackagedSelfTest(
+  profileDirectory,
+  fixturePaths,
+  rejectedFixturePaths,
+  loaderRejectionFixturePaths,
+) {
+  const capability = createSelfTestCapability(
+    profileDirectory,
+    fixturePaths,
+    rejectedFixturePaths,
+    loaderRejectionFixturePaths,
+  );
   const processLogs = [];
   const child = spawn(APP_PATH, [
     `--nexoip-self-test=${capability.configPath}`,
@@ -263,6 +280,7 @@ async function runPackagedSelfTest(profileDirectory, fixturePaths, rejectedFixtu
     assert(report.checks?.localRenderer?.title === 'NexoIP 3D Viewer', 'Packaged renderer title was unexpected.');
     assertPackagedFixtureMatrixReport(report, 'Packaged application');
     assertPackagedRejectionMatrixReport(report, 'Packaged application');
+    assertPackagedLoaderRejectionMatrixReport(report, 'Packaged application');
     assert(report.checks?.preloadContract?.available === true, 'Packaged preload bridge was not available.');
     assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
       'Packaged preload contract did not report every format fixture.');
@@ -299,6 +317,8 @@ async function main() {
   const fixtureMatrix = await preparePackagedFixtureMatrix();
   const fixturePaths = fixtureMatrix.fixtures.map((fixture) => fixture.fixturePath);
   const rejectedFixturePaths = fixtureMatrix.rejectedFixtures.map((fixture) => fixture.fixturePath);
+  const loaderRejectionFixturePaths = fixtureMatrix.loaderRejectedFixtures
+    .map((fixture) => fixture.fixturePath);
   const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'nexoip-smoke-'));
   try {
     for (const locale of REQUIRED_LOCALES) {
@@ -306,8 +326,13 @@ async function main() {
         `Missing packaged locale: ${locale}`);
     }
     await assertDangerousArgumentsAreRejected(profileDirectory);
-    await runPackagedSelfTest(profileDirectory, fixturePaths, rejectedFixturePaths);
-    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, six hostile candidates rejected before publication, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
+    await runPackagedSelfTest(
+      profileDirectory,
+      fixturePaths,
+      rejectedFixturePaths,
+      loaderRejectionFixturePaths,
+    );
+    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, six hostile candidates rejected before publication, one missing dependency rejected recoverably, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
   } finally {
     await fixtureMatrix.cleanup();
     try {

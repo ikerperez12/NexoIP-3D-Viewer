@@ -8,6 +8,7 @@ const MAX_CONFIG_BYTES = 16 * 1024;
 const MAX_ASSET_PROBE_BYTES = 64 * 1024;
 const MAX_FIXTURE_PATHS = 12;
 const MAX_REJECTION_FIXTURE_PATHS = 12;
+const MAX_LOADER_REJECTION_FIXTURE_PATHS = 4;
 const MODEL_LOAD_TIMEOUT_MS = 20_000;
 const TEMP_CONFIG_PATTERN = /^nexoip-packaged-self-test-[a-f0-9]+\.json$/;
 const TEMP_RESULT_PATTERN = /^result-[a-f0-9]+\.json$/;
@@ -66,6 +67,7 @@ async function canonicalTemporaryConfigPath(configPath) {
 async function validateConfig(config, configPath, expectedDigest) {
   const hasScreenshotPath = Object.hasOwn(config || {}, 'screenshotPath');
   const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
+  const loaderRejectionFixturePaths = config?.loaderRejectionFixturePaths ?? [];
   if (!isPlainObject(config)
     || config.version !== 2
     || typeof config.token !== 'string'
@@ -79,6 +81,11 @@ async function validateConfig(config, configPath, expectedDigest) {
     || !Array.isArray(rejectedFixturePaths)
     || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS
     || rejectedFixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
+    || !Array.isArray(loaderRejectionFixturePaths)
+    || loaderRejectionFixturePaths.length > MAX_LOADER_REJECTION_FIXTURE_PATHS
+    || loaderRejectionFixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
       || !path.isAbsolute(fixturePath)
       || !isSupportedModelPath(fixturePath))
     || typeof config.resultPath !== 'string'
@@ -98,12 +105,20 @@ async function validateConfig(config, configPath, expectedDigest) {
   let screenshotDirectory;
   let fixturePaths;
   let canonicalRejectedFixturePaths;
+  let canonicalLoaderRejectionFixturePaths;
   try {
-    [configDirectory, resultDirectory, fixturePaths, canonicalRejectedFixturePaths] = await Promise.all([
+    [
+      configDirectory,
+      resultDirectory,
+      fixturePaths,
+      canonicalRejectedFixturePaths,
+      canonicalLoaderRejectionFixturePaths,
+    ] = await Promise.all([
       fs.promises.realpath(path.dirname(configPath)),
       fs.promises.realpath(path.dirname(config.resultPath)),
       Promise.all(config.fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
       Promise.all(rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+      Promise.all(loaderRejectionFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
     ]);
     if (hasScreenshotPath) {
       screenshotDirectory = await fs.promises.realpath(path.dirname(config.screenshotPath));
@@ -116,7 +131,11 @@ async function validateConfig(config, configPath, expectedDigest) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
-  const allFixturePaths = [...fixturePaths, ...canonicalRejectedFixturePaths];
+  const allFixturePaths = [
+    ...fixturePaths,
+    ...canonicalRejectedFixturePaths,
+    ...canonicalLoaderRejectionFixturePaths,
+  ];
   const uniqueFixturePaths = new Set(allFixturePaths.map((fixturePath) => (
     process.platform === 'win32' ? fixturePath.toLowerCase() : fixturePath
   )));
@@ -133,6 +152,7 @@ async function validateConfig(config, configPath, expectedDigest) {
   return {
     fixturePaths,
     rejectedFixturePaths: canonicalRejectedFixturePaths,
+    loaderRejectionFixturePaths: canonicalLoaderRejectionFixturePaths,
     resultPath: path.join(resultDirectory, path.basename(config.resultPath)),
     screenshotPath: hasScreenshotPath
       ? path.join(screenshotDirectory, path.basename(config.screenshotPath))
@@ -462,6 +482,104 @@ async function probeRendererModelLoad(renderer, model, expectedSize, { prepareSc
   return result;
 }
 
+async function probeRendererModelRejection(renderer, model, expectedSize) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot dispatch and observe a rejected model load.');
+  }
+
+  renderer.send('nexoip:model-opened', model);
+  let result;
+  try {
+    result = await renderer.executeJavaScript(`(async () => {
+    const bridgeAvailable = Boolean(window.nexoip)
+      && typeof window.nexoip.getCatalogPage === 'function'
+      && typeof window.nexoip.getModelUrl === 'function';
+    if (!bridgeAvailable) throw new Error('The packaged preload bridge was not available for the rejection probe.');
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const expectedSize = ${JSON.stringify(expectedSize)};
+    const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+    const catalogPage = await window.nexoip.getCatalogPage({
+      filters: { query: ${JSON.stringify(model.name)}, sortBy: 'name', order: 'asc' },
+      limit: 100,
+    });
+    const registered = Array.isArray(catalogPage?.items)
+      && catalogPage.items.some((item) => item.id === expectedModelId);
+    if (!registered) throw new Error('The loader-rejection fixture is missing from the packaged library.');
+
+    const modelResponse = await fetch(window.nexoip.getModelUrl(expectedModelId), { cache: 'no-store' });
+    const modelBytes = modelResponse.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
+    if (modelBytes !== expectedSize) {
+      throw new Error('The private model protocol did not return the complete loader-rejection fixture.');
+    }
+
+    while (performance.now() < deadline) {
+      const dialog = document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      if (dialog instanceof HTMLDialogElement) {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const title = document.getElementById('model-error-title')?.textContent?.trim() || '';
+        const description = document.getElementById('model-error-description')?.textContent?.trim() || '';
+        const failedMarkerAbsent = document.querySelector('main')?.getAttribute('data-loaded-model-id') !== expectedModelId;
+        const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+          .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+        const safeErrorMessage = title === 'No se pudo abrir el archivo 3D'
+          && description.startsWith('No se pudo cargar el material OBJ')
+          && !/(?:file|nexoip):/i.test(description)
+          && !/[A-Za-z]:/.test(description);
+        const canvasPresent = document.querySelector('[data-viewport-controls] canvas') instanceof HTMLCanvasElement;
+        const chooseAnother = Array.from(dialog.querySelectorAll('button'))
+          .find((button) => button.textContent?.trim() === 'Elegir otro modelo');
+        if (!(chooseAnother instanceof HTMLButtonElement)) {
+          throw new Error('The packaged rejection dialog has no recovery action.');
+        }
+        chooseAnother.click();
+
+        const recoveryDeadline = performance.now() + 2_000;
+        let recoveredToLibrary = false;
+        while (performance.now() < recoveryDeadline) {
+          recoveredToLibrary = !dialog.open
+            && !document.querySelector('main')?.getAttribute('data-loaded-model-id')
+            && !document.querySelector('button[aria-current="true"]')
+            && Boolean(document.querySelector('aside[aria-label="Biblioteca de modelos locales"]'));
+          if (recoveredToLibrary) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return {
+          registered,
+          protocolBytesComplete: modelBytes === expectedSize,
+          errorDialogVisible: true,
+          safeErrorMessage,
+          failedMarkerAbsent,
+          loadingSettled,
+          canvasPresent,
+          recoveredToLibrary,
+        };
+      }
+      if (document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId) {
+        throw new Error('The packaged renderer published a loaded marker for a dependency-failing fixture.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('The packaged renderer did not expose a recoverable dependency-load error.');
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged renderer rejection probe failed.', { cause: error });
+  }
+
+  const valid = result?.registered === true
+    && result.protocolBytesComplete === true
+    && result.errorDialogVisible === true
+    && result.safeErrorMessage === true
+    && result.failedMarkerAbsent === true
+    && result.loadingSettled === true
+    && result.canvasPresent === true
+    && result.recoveredToLibrary === true;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete evidence for a recoverable rejected load.');
+  }
+  return result;
+}
+
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -593,6 +711,7 @@ export async function loadPackagedSelfTestConfig(request) {
 export async function runPackagedSelfTest({ scanner, config, renderer, window: applicationWindow }) {
   const startedAt = new Date().toISOString();
   const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
+  const loaderRejectionFixturePaths = config?.loaderRejectionFixturePaths ?? [];
   const report = {
     version: 2,
     status: 'failed',
@@ -605,7 +724,9 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       || config.fixturePaths.length === 0
       || config.fixturePaths.length > MAX_FIXTURE_PATHS
       || !Array.isArray(rejectedFixturePaths)
-      || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS) {
+      || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS
+      || !Array.isArray(loaderRejectionFixturePaths)
+      || loaderRejectionFixturePaths.length > MAX_LOADER_REJECTION_FIXTURE_PATHS) {
       throw new Error('The packaged self-test fixture matrix is invalid.');
     }
 
@@ -899,14 +1020,18 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
 
     const formatMatrix = [];
     const rejectedFormatMatrix = [];
+    const loaderRejectedFormatMatrix = [];
     let totalModelBytes = 0;
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
       formatMatrix,
       rejectedFormatMatrix,
+      loaderRejectedFormatMatrix,
       preloadContract: {
         available: true,
         modelCount: 0,
+        rejectedBeforePublicationCount: 0,
+        loaderRejectedCount: 0,
         totalModelBytes: 0,
         noDebuggingTransport: true,
       },
@@ -945,6 +1070,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
         size: fixtureStats.size,
         rejectedBeforePublication: true,
       });
+      report.checks.preloadContract.rejectedBeforePublicationCount = rejectedFormatMatrix.length;
     }
     for (let fixtureIndex = 0; fixtureIndex < config.fixturePaths.length; fixtureIndex += 1) {
       const fixturePath = config.fixturePaths[fixtureIndex];
@@ -1012,6 +1138,47 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       }
       report.checks.preloadContract.modelCount = formatMatrix.length;
       report.checks.preloadContract.totalModelBytes = totalModelBytes;
+    }
+    for (let fixtureIndex = 0; fixtureIndex < loaderRejectionFixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = loaderRejectionFixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let model;
+      try {
+        model = await scanner.registerDroppedPath(fixturePath);
+      } catch {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} could not be registered securely.`);
+      }
+
+      let modelRejection;
+      try {
+        modelRejection = await probeRendererModelRejection(renderer, model, fixtureStats.size);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const safeDetail = /^(The packaged|The private|The registered)/.test(message)
+          ? message
+          : 'The renderer rejection probe failed without safe diagnostics.';
+        throw new Error(
+          `Packaged loader-rejection fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`,
+          { cause: error },
+        );
+      }
+
+      loaderRejectedFormatMatrix.push({
+        name: model.name,
+        extension: path.extname(model.name).slice(1).toLowerCase(),
+        size: model.size,
+        ...modelRejection,
+      });
+      report.checks.preloadContract.loaderRejectedCount = loaderRejectedFormatMatrix.length;
     }
     report.status = 'passed';
   } catch (error) {

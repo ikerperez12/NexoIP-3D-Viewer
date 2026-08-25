@@ -97,6 +97,18 @@ function createPassingSelfTestHarness(fixturePath, capturePage) {
     setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
     send: vi.fn(),
     executeJavaScript: vi.fn(async (source) => {
+      if (source.includes('model-error-title')) {
+        return {
+          registered: true,
+          protocolBytesComplete: true,
+          errorDialogVisible: true,
+          safeErrorMessage: true,
+          failedMarkerAbsent: true,
+          loadingSettled: true,
+          canvasPresent: true,
+          recoveredToLibrary: true,
+        };
+      }
       if (source.includes('data-loaded-model-id')) {
         modelLoadObserved = true;
         const size = (await fs.promises.stat(fixturePath)).size;
@@ -134,10 +146,10 @@ function createPassingSelfTestHarness(fixturePath, capturePage) {
     applicationWindow,
     renderer,
     scanner: {
-      registerDroppedPath: async () => ({
-        id: 'a'.repeat(48),
-        name: path.basename(fixturePath),
-        size: (await fs.promises.stat(fixturePath)).size,
+      registerDroppedPath: async (candidatePath) => ({
+        id: createHash('sha256').update(candidatePath).digest('hex').slice(0, 48),
+        name: path.basename(candidatePath),
+        size: (await fs.promises.stat(candidatePath)).size,
       }),
       openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),
     },
@@ -174,7 +186,13 @@ test('packaged self-test accepts the unique positive and rejection format matric
   try {
     const fixturePaths = prepared.fixtures.map((fixture) => fixture.fixturePath);
     const rejectedFixturePaths = prepared.rejectedFixtures.map((fixture) => fixture.fixturePath);
-    const capability = await writeCapabilityConfig({ fixturePaths, rejectedFixturePaths });
+    const loaderRejectionFixturePaths = prepared.loaderRejectedFixtures
+      .map((fixture) => fixture.fixturePath);
+    const capability = await writeCapabilityConfig({
+      fixturePaths,
+      rejectedFixturePaths,
+      loaderRejectionFixturePaths,
+    });
     const config = await loadPackagedSelfTestConfig({
       valid: true,
       configPath: capability.configPath,
@@ -186,6 +204,9 @@ test('packaged self-test accepts the unique positive and rejection format matric
     ));
     expect(config.rejectedFixturePaths).toEqual(await Promise.all(
       rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
+    expect(config.loaderRejectionFixturePaths).toEqual(await Promise.all(
+      loaderRejectionFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
     ));
   } finally {
     await prepared.cleanup();
@@ -250,6 +271,44 @@ test('packaged self-test records hostile candidates rejected before catalog publ
     size: (await fs.promises.stat(rejectedFixturePath)).size,
     rejectedBeforePublication: true,
   }]);
+});
+
+test('packaged self-test records a valid model with a missing dependency as safely recoverable', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const loaderRejectionFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'invalid',
+    'missing-material.obj',
+  );
+  const harness = createPassingSelfTestHarness(fixturePath);
+
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: {
+      fixturePaths: [fixturePath],
+      loaderRejectionFixturePaths: [loaderRejectionFixturePath],
+    },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.loaderRejectedFormatMatrix).toEqual([{
+    name: 'missing-material.obj',
+    extension: 'obj',
+    size: (await fs.promises.stat(loaderRejectionFixturePath)).size,
+    registered: true,
+    protocolBytesComplete: true,
+    errorDialogVisible: true,
+    safeErrorMessage: true,
+    failedMarkerAbsent: true,
+    loadingSettled: true,
+    canvasPresent: true,
+    recoveredToLibrary: true,
+  }]);
+  expect(report.checks.preloadContract.loaderRejectedCount).toBe(1);
+  expect(JSON.stringify(report.checks.loaderRejectedFormatMatrix)).not.toContain(loaderRejectionFixturePath);
 });
 
 test('packaged self-test rejects result paths outside the capability directory', async () => {
@@ -320,6 +379,15 @@ test('packaged self-test rejects legacy, duplicate, and oversized fixture capabi
     valid: true,
     configPath: crossMatrixDuplicate.configPath,
     tokenDigest: crossMatrixDuplicate.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const loaderCrossMatrixDuplicate = await writeCapabilityConfig(({ fixturePath }) => ({
+    loaderRejectionFixturePaths: [fixturePath],
+  }));
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: loaderCrossMatrixDuplicate.configPath,
+    tokenDigest: loaderCrossMatrixDuplicate.tokenDigest,
   })).rejects.toThrow('configuration is invalid');
 
   const oversized = await writeCapabilityConfig({
