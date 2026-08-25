@@ -301,6 +301,27 @@ export function assertPackagedLoaderRejectionMatrixReport(report, artifactLabel 
   }
 }
 
+export function assertPackagedWebglRecoveryReport(report, artifactLabel = 'Packaged application') {
+  const recovery = report?.checks?.webglRecovery;
+  const valid = recovery?.lossEventPrevented === true
+    && recovery?.lossDialogVisible === true
+    && recovery?.recoveryActionVisible === true
+    && recovery?.generationAdvanced === true
+    && recovery?.canvasReplaced === true
+    && recovery?.modelReloaded === true
+    && recovery?.loadingSettled === true
+    && recovery?.dialogClosed === true
+    && recovery?.contextHealthy === true;
+  if (!valid) {
+    throw new Error(`${artifactLabel} did not provide complete packaged WebGL recovery evidence.`);
+  }
+  if (Object.hasOwn(recovery, 'path')
+    || Object.hasOwn(recovery, 'modelId')
+    || Object.hasOwn(recovery, 'errorMessage')) {
+    throw new Error(`${artifactLabel} exposed unnecessary WebGL recovery diagnostics.`);
+  }
+}
+
 export function assertPackagedFixtureMatrixReport(report, artifactLabel = 'Packaged application') {
   const actualMatrix = report?.checks?.formatMatrix;
   if (!Array.isArray(actualMatrix) || actualMatrix.length !== PACKAGED_FIXTURE_MATRIX.length) {

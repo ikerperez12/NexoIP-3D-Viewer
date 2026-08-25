@@ -482,6 +482,112 @@ async function probeRendererModelLoad(renderer, model, expectedSize, { prepareSc
   return result;
 }
 
+async function probeRendererContextRecovery(renderer, model) {
+  if (typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot exercise WebGL recovery.');
+  }
+
+  let result;
+  try {
+    result = await renderer.executeJavaScript(`(async () => {
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const timeoutMs = ${MODEL_LOAD_TIMEOUT_MS};
+    const container = document.querySelector('[data-viewport-controls]');
+    const previousCanvas = container?.querySelector('canvas');
+    const previousGeneration = container?.dataset?.rendererGeneration;
+    if (!(previousCanvas instanceof HTMLCanvasElement) || previousGeneration === undefined) {
+      throw new Error('The packaged WebGL recovery probe has no active renderer generation.');
+    }
+
+    const lossEvent = new Event('webglcontextlost', { cancelable: true });
+    const lossWasNotCancelled = previousCanvas.dispatchEvent(lossEvent);
+    const lossDeadline = performance.now() + timeoutMs;
+    let lossDialogVisible = false;
+    let recoveryActionVisible = false;
+    while (performance.now() < lossDeadline) {
+      const dialog = document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      const title = document.getElementById('model-error-title')?.textContent?.trim();
+      const recover = Array.from(dialog?.querySelectorAll('button') || [])
+        .find((button) => button.textContent?.trim() === 'Recuperar vista');
+      lossDialogVisible = dialog instanceof HTMLDialogElement
+        && title === 'No se pudo iniciar la vista 3D';
+      recoveryActionVisible = recover instanceof HTMLButtonElement;
+      if (lossDialogVisible && recoveryActionVisible) {
+        recover.click();
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!lossDialogVisible || !recoveryActionVisible) {
+      throw new Error('The packaged renderer did not expose its WebGL recovery action.');
+    }
+
+    const recoveryDeadline = performance.now() + timeoutMs;
+    while (performance.now() < recoveryDeadline) {
+      const nextContainer = document.querySelector('[data-viewport-controls]');
+      const nextCanvas = nextContainer?.querySelector('canvas');
+      const nextGeneration = nextContainer?.dataset?.rendererGeneration;
+      const generationAdvanced = nextGeneration !== undefined && nextGeneration !== previousGeneration;
+      const canvasReplaced = nextCanvas instanceof HTMLCanvasElement && nextCanvas !== previousCanvas;
+      const modelReloaded = nextContainer?.dataset?.loadedModelId === expectedModelId
+        && nextContainer?.dataset?.loadedRendererGeneration === nextGeneration
+        && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId;
+      const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+        .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+      const dialogClosed = !document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      let contextHealthy = false;
+      if (nextCanvas instanceof HTMLCanvasElement) {
+        let context = null;
+        try {
+          context = nextCanvas.getContext('webgl2') || nextCanvas.getContext('webgl');
+        } catch {
+          context = null;
+        }
+        contextHealthy = Boolean(context)
+          && (typeof context.isContextLost !== 'function' || context.isContextLost() === false);
+      }
+      if (generationAdvanced
+        && canvasReplaced
+        && modelReloaded
+        && loadingSettled
+        && dialogClosed
+        && contextHealthy) {
+        return {
+          lossEventPrevented: lossWasNotCancelled === false,
+          lossDialogVisible,
+          recoveryActionVisible,
+          generationAdvanced,
+          canvasReplaced,
+          modelReloaded,
+          loadingSettled,
+          dialogClosed,
+          contextHealthy,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('The packaged renderer did not recover a healthy WebGL generation in time.');
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged WebGL recovery probe failed.', { cause: error });
+  }
+
+  const valid = result?.lossEventPrevented === true
+    && result.lossDialogVisible === true
+    && result.recoveryActionVisible === true
+    && result.generationAdvanced === true
+    && result.canvasReplaced === true
+    && result.modelReloaded === true
+    && result.loadingSettled === true
+    && result.dialogClosed === true
+    && result.contextHealthy === true;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete WebGL recovery evidence.');
+  }
+  return result;
+}
+
 async function probeRendererModelRejection(renderer, model, expectedSize) {
   if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
     throw new Error('The packaged self-test cannot dispatch and observe a rejected model load.');
@@ -1022,6 +1128,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     const rejectedFormatMatrix = [];
     const loaderRejectedFormatMatrix = [];
     let totalModelBytes = 0;
+    let lastLoadedModel = null;
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
       formatMatrix,
@@ -1120,6 +1227,7 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
         throw new Error(`Packaged format fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`, { cause: error });
       }
       totalModelBytes += modelLoad.modelBytes;
+      lastLoadedModel = model;
       formatMatrix.push({
         name: model.name,
         extension: path.extname(model.name).slice(1).toLowerCase(),
@@ -1139,6 +1247,10 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       report.checks.preloadContract.modelCount = formatMatrix.length;
       report.checks.preloadContract.totalModelBytes = totalModelBytes;
     }
+    if (!lastLoadedModel) {
+      throw new Error('The packaged WebGL recovery probe has no loaded model.');
+    }
+    report.checks.webglRecovery = await probeRendererContextRecovery(renderer, lastLoadedModel);
     for (let fixtureIndex = 0; fixtureIndex < loaderRejectionFixturePaths.length; fixtureIndex += 1) {
       const fixturePath = loaderRejectionFixturePaths[fixtureIndex];
       let fixtureStats;

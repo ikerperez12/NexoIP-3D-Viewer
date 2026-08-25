@@ -26,5 +26,8 @@ describe('viewport rendering lifecycle contract', () => {
     expect(viewportSource).not.toContain('requestAnimationFrame(renderFrame)');
     expect(viewportSource).not.toContain('new THREE.Clock');
     expect(viewportSource).toContain('onModelLoaded?.({ modelId: currentFile.id');
+    expect(viewportSource).toContain('containerRef.current.dataset.loadedModelId = currentFile.id');
+    expect(viewportSource).toContain('containerRef.current.dataset.loadedRendererGeneration = String(rendererGeneration)');
+    expect(viewportSource).toContain('delete containerRef.current.dataset.loadedModelId');
   });
 });

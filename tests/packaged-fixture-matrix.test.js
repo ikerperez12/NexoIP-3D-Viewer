@@ -13,6 +13,7 @@ import {
   assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionFiles,
   assertPackagedRejectionMatrixReport,
+  assertPackagedWebglRecoveryReport,
   createAnimatedTriangleGlb,
   preparePackagedFixtureMatrix,
 } from '../scripts/packaged-fixture-matrix.mjs';
@@ -52,6 +53,17 @@ function createPassingReport() {
         canvasPresent: true,
         recoveredToLibrary: true,
       })),
+      webglRecovery: {
+        lossEventPrevented: true,
+        lossDialogVisible: true,
+        recoveryActionVisible: true,
+        generationAdvanced: true,
+        canvasReplaced: true,
+        modelReloaded: true,
+        loadingSettled: true,
+        dialogClosed: true,
+        contextHealthy: true,
+      },
     },
   };
 }
@@ -95,6 +107,7 @@ test('packaged fixture report accepts complete real-load evidence without local 
   expect(() => assertPackagedFixtureMatrixReport(report, 'Test artifact')).not.toThrow();
   expect(() => assertPackagedRejectionMatrixReport(report, 'Test artifact')).not.toThrow();
   expect(() => assertPackagedLoaderRejectionMatrixReport(report, 'Test artifact')).not.toThrow();
+  expect(() => assertPackagedWebglRecoveryReport(report, 'Test artifact')).not.toThrow();
   expect(JSON.stringify(report.checks.formatMatrix)).not.toContain('fixturePath');
   expect(JSON.stringify(report.checks.rejectedFormatMatrix)).not.toContain('fixturePath');
   expect(JSON.stringify(report.checks.loaderRejectedFormatMatrix)).not.toContain('fixturePath');
@@ -146,4 +159,16 @@ test('packaged loader-rejection report requires safe recovery without local diag
   diagnosticLeak.checks.loaderRejectedFormatMatrix[0].errorMessage = 'C:\\private\\missing.mtl';
   expect(() => assertPackagedLoaderRejectionMatrixReport(diagnosticLeak, 'Test artifact'))
     .toThrow('may contain a local path');
+});
+
+test('packaged WebGL recovery report requires a replaced healthy context without identifiers', () => {
+  const incomplete = createPassingReport();
+  incomplete.checks.webglRecovery.canvasReplaced = false;
+  expect(() => assertPackagedWebglRecoveryReport(incomplete, 'Test artifact'))
+    .toThrow('complete packaged WebGL recovery evidence');
+
+  const diagnosticLeak = createPassingReport();
+  diagnosticLeak.checks.webglRecovery.modelId = 'a'.repeat(48);
+  expect(() => assertPackagedWebglRecoveryReport(diagnosticLeak, 'Test artifact'))
+    .toThrow('unnecessary WebGL recovery diagnostics');
 });

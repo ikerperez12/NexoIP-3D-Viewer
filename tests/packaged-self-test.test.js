@@ -97,6 +97,19 @@ function createPassingSelfTestHarness(fixturePath, capturePage) {
     setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
     send: vi.fn(),
     executeJavaScript: vi.fn(async (source) => {
+      if (source.includes('webglcontextlost')) {
+        return {
+          lossEventPrevented: true,
+          lossDialogVisible: true,
+          recoveryActionVisible: true,
+          generationAdvanced: true,
+          canvasReplaced: true,
+          modelReloaded: true,
+          loadingSettled: true,
+          dialogClosed: true,
+          contextHealthy: true,
+        };
+      }
       if (source.includes('model-error-title')) {
         return {
           registered: true,
@@ -311,6 +324,32 @@ test('packaged self-test records a valid model with a missing dependency as safe
   expect(JSON.stringify(report.checks.loaderRejectedFormatMatrix)).not.toContain(loaderRejectionFixturePath);
 });
 
+test('packaged self-test records a replaced and healthy WebGL generation', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const harness = createPassingSelfTestHarness(fixturePath);
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: { fixturePaths: [fixturePath] },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.webglRecovery).toEqual({
+    lossEventPrevented: true,
+    lossDialogVisible: true,
+    recoveryActionVisible: true,
+    generationAdvanced: true,
+    canvasReplaced: true,
+    modelReloaded: true,
+    loadingSettled: true,
+    dialogClosed: true,
+    contextHealthy: true,
+  });
+  expect(harness.renderer.executeJavaScript.mock.calls.some(([source]) => (
+    source.includes('webglcontextlost') && source.includes('Recuperar vista')
+  ))).toBe(true);
+});
+
 test('packaged self-test rejects result paths outside the capability directory', async () => {
   const outsideDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'nexoip-capability-outside-'));
   temporaryDirectories.push(outsideDirectory);
@@ -432,10 +471,12 @@ test('packaged self-test atomically records a main-process PNG capture after the
   expect(nativeImage.isEmpty).toHaveBeenCalledOnce();
   expect(nativeImage.getSize).toHaveBeenCalledOnce();
   expect(nativeImage.toPNG).toHaveBeenCalledOnce();
-  expect(harness.renderer.executeJavaScript.mock.calls.at(-1)[0]).toContain('prepareScreenshotFrame');
-  expect(harness.renderer.executeJavaScript.mock.calls.at(-1)[0]).toContain('transientLoadStatusVisible');
-  expect(harness.renderer.executeJavaScript.mock.calls.at(-1)[0]).toContain('Cerrar biblioteca de modelos');
-  expect(harness.renderer.executeJavaScript.mock.calls.at(-1)[0]).toContain('Abrir propiedades del modelo');
+  const screenshotProbe = harness.renderer.executeJavaScript.mock.calls
+    .map(([source]) => source)
+    .find((source) => source.includes('prepareScreenshotFrame'));
+  expect(screenshotProbe).toContain('transientLoadStatusVisible');
+  expect(screenshotProbe).toContain('Cerrar biblioteca de modelos');
+  expect(screenshotProbe).toContain('Abrir propiedades del modelo');
   expect(report.checks.screenshot).toEqual({
     filename: 'screenshot-a1b2.png',
     width: 1280,

@@ -8,6 +8,7 @@ import {
   assertPackagedFixtureMatrixReport,
   assertPackagedLoaderRejectionMatrixReport,
   assertPackagedRejectionMatrixReport,
+  assertPackagedWebglRecoveryReport,
   preparePackagedFixtureMatrix,
 } from './packaged-fixture-matrix.mjs';
 
@@ -281,6 +282,7 @@ async function runPackagedSelfTest(
     assertPackagedFixtureMatrixReport(report, 'Packaged application');
     assertPackagedRejectionMatrixReport(report, 'Packaged application');
     assertPackagedLoaderRejectionMatrixReport(report, 'Packaged application');
+    assertPackagedWebglRecoveryReport(report, 'Packaged application');
     assert(report.checks?.preloadContract?.available === true, 'Packaged preload bridge was not available.');
     assert(report.checks?.preloadContract?.modelCount === fixturePaths.length,
       'Packaged preload contract did not report every format fixture.');
@@ -332,7 +334,7 @@ async function main() {
       rejectedFixturePaths,
       loaderRejectionFixturePaths,
     );
-    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, six hostile candidates rejected before publication, one missing dependency rejected recoverably, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
+    console.log('Packaged smoke passed: unsafe flags rejected; ten real format loads, six hostile candidates rejected before publication, one missing dependency rejected recoverably, controlled WebGL recovery, local renderer, and targeted accessibility/responsive evidence passed without CDP.');
   } finally {
     await fixtureMatrix.cleanup();
     try {

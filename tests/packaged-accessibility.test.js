@@ -134,9 +134,23 @@ test('packaged self-test records accessibility evidence and restores its viewpor
     getZoomFactor: vi.fn(() => zoomFactor),
     setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
     send: vi.fn(),
-    executeJavaScript: vi.fn(async (source) => (source.includes('data-loaded-model-id')
-      ? createModelLoadEvidence(fixtureStats.size)
-      : {
+    executeJavaScript: vi.fn(async (source) => {
+      if (source.includes('webglcontextlost')) {
+        return {
+          lossEventPrevented: true,
+          lossDialogVisible: true,
+          recoveryActionVisible: true,
+          generationAdvanced: true,
+          canvasReplaced: true,
+          modelReloaded: true,
+          loadingSettled: true,
+          dialogClosed: true,
+          contextHealthy: true,
+        };
+      }
+      return source.includes('data-loaded-model-id')
+        ? createModelLoadEvidence(fixtureStats.size)
+        : {
           bridgeAvailable: true,
           bundledRuntimes: [
             { runtimePath: '/draco/draco_decoder.wasm', status: 200, bytes: 1 },
@@ -145,7 +159,8 @@ test('packaged self-test records accessibility evidence and restores its viewpor
             { runtimePath: '/basis/basis_transcoder.wasm', status: 200, bytes: 1 },
           ],
           accessibility: createEvidence(),
-        })),
+        };
+    }),
   };
 
   const report = await runPackagedSelfTest({
@@ -171,6 +186,7 @@ test('packaged self-test records accessibility evidence and restores its viewpor
   expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('waitForStableLayout');
   expect(renderer.executeJavaScript.mock.calls[0][0]).toContain('document.fonts?.ready');
   expect(renderer.executeJavaScript.mock.calls[1][0]).toContain('data-loaded-model-id');
+  expect(renderer.executeJavaScript.mock.calls[2][0]).toContain('webglcontextlost');
   expect(renderer.send).toHaveBeenCalledOnce();
   expect(renderer.send).toHaveBeenCalledWith('nexoip:model-opened', model);
   expect(report.checks.accessibilityResponsive.restoredWindow).toEqual(originalBounds);

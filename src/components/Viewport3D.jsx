@@ -169,6 +169,10 @@ export default function Viewport3D({
   };
 
   const releaseCurrentModel = () => {
+    if (containerRef.current) {
+      delete containerRef.current.dataset.loadedModelId;
+      delete containerRef.current.dataset.loadedRendererGeneration;
+    }
     const model = currentModelRef.current;
     if (!model) return;
 
@@ -533,6 +537,10 @@ export default function Viewport3D({
         });
         sceneRef.current.add(object);
         currentModelRef.current = object;
+        if (containerRef.current) {
+          containerRef.current.dataset.loadedModelId = currentFile.id;
+          containerRef.current.dataset.loadedRendererGeneration = String(rendererGeneration);
+        }
         animationsRef.current = animations || [];
         mixerRef.current = animationsRef.current.length ? new THREE.AnimationMixer(object) : null;
         activeActionRef.current = null;
