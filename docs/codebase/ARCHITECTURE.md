@@ -21,7 +21,7 @@ native folder picker or dropped File
 
 1. `dialog.showOpenDialog` or `webUtils.getPathForFile` establishes explicit user intent (`electron/main.js`, `electron/preload.cjs`).
 2. `registerIpcHandler` verifies the sender, top frame and renderer origin before the main process handles a request (`electron/main.js:116-141`).
-3. `FileScanner` canonicalises user-selected roots, traverses them cycle-safely and cancellably, and stores private paths only in memory (`electron/file-scanner.js`).
+3. `FileScanner` canonicalises user-selected roots, traverses them cycle-safely and cancellably, delegates bounded format/compact-geometry checks to `electron/model-preflight.js`, and stores private paths only in memory (`electron/file-scanner.js`).
 4. Renderer DTOs expose name, extension, size, timestamp and opaque ID, never a path (`electron/file-scanner.js`).
 5. The renderer requests revisioned catalog/tree pages and metadata-only change notifications through the same validated capability boundary. The first validated discovery publishes immediately; dense follow-up notices are coalesced to at most one every 200 ms before the final snapshot, so it never receives a native path or a full-library refresh (`electron/main.js`, `electron/preload.cjs`, `electron/file-scanner.js`).
 6. The private protocol resolves an ID, opens an identity-checked descriptor and streams it with a safe MIME type (`electron/main.js`, `electron/file-scanner.js`).
@@ -34,7 +34,9 @@ native folder picker or dropped File
 | Layer or module | Owns | Must not own | Evidence |
 | --- | --- | --- | --- |
 | `electron/main.js` | Application lifecycle, native integrations, IPC registration and protocol routing | Model parsing or renderer UI | `electron/main.js:39-318` |
-| `electron/file-scanner.js` | User-approved path registry, progressive structurally-valid discovery, opaque IDs and safe file handles | DOM state or network transport | `electron/file-scanner.js` |
+| `electron/file-scanner.js` | User-approved path registry, progressive prechecked discovery, opaque IDs and safe file handles | DOM state or network transport | `electron/file-scanner.js` |
+| `electron/model-preflight.js` | Bounded format and compact-geometry preflight for catalog candidates | Filesystem traversal or renderer parsing | `electron/model-preflight.js` |
+| `shared/model-formats.js` | Canonical advertised format identifiers shared by main and renderer | Format parser behavior or filesystem policy | `shared/model-formats.js` |
 | `electron/security.js` | Shared allowlists, URL/path validation and MIME mapping | Filesystem I/O | `electron/security.js:3-224` |
 | `electron/preload.cjs` | Narrow capability surface | Final authorization decisions | `electron/preload.cjs:40-103` |
 | `src/main.jsx` / `src/components/AppErrorBoundary.jsx` | Root renderer recovery after an unexpected component failure | Native access or diagnostic details about local files | `src/main.jsx`, `src/components/AppErrorBoundary.jsx` |

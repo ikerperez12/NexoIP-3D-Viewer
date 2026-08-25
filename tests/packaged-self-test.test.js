@@ -169,11 +169,12 @@ test('packaged self-test accepts a canonical sibling screenshot target', async (
   expect(config.screenshotPath).toBe(path.join(await fs.promises.realpath(capability.directory), 'screenshot-a1b2.png'));
 });
 
-test('packaged self-test accepts the unique ten-entry shared format matrix', async () => {
+test('packaged self-test accepts the unique positive and rejection format matrices', async () => {
   const prepared = await preparePackagedFixtureMatrix();
   try {
     const fixturePaths = prepared.fixtures.map((fixture) => fixture.fixturePath);
-    const capability = await writeCapabilityConfig({ fixturePaths });
+    const rejectedFixturePaths = prepared.rejectedFixtures.map((fixture) => fixture.fixturePath);
+    const capability = await writeCapabilityConfig({ fixturePaths, rejectedFixturePaths });
     const config = await loadPackagedSelfTestConfig({
       valid: true,
       configPath: capability.configPath,
@@ -182,6 +183,9 @@ test('packaged self-test accepts the unique ten-entry shared format matrix', asy
 
     expect(config.fixturePaths).toEqual(await Promise.all(
       fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
+    expect(config.rejectedFixturePaths).toEqual(await Promise.all(
+      rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
     ));
   } finally {
     await prepared.cleanup();
@@ -212,6 +216,40 @@ test('packaged self-test accepts a temporary directory alias after canonicalisat
     tokenDigest: createHash('sha256').update(token).digest('hex'),
   });
   expect(config.resultPath).toBe(path.join(await fs.promises.realpath(realDirectory), 'result-b2.json'));
+});
+
+test('packaged self-test records hostile candidates rejected before catalog publication', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const rejectedFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'invalid',
+    'malformed.obj',
+  );
+  const harness = createPassingSelfTestHarness(fixturePath);
+  const registerValidFixture = harness.scanner.registerDroppedPath;
+  harness.scanner.registerDroppedPath = async (candidatePath) => {
+    if (candidatePath === rejectedFixturePath) throw new TypeError('Invalid dropped file.');
+    return registerValidFixture(candidatePath);
+  };
+
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: {
+      fixturePaths: [fixturePath],
+      rejectedFixturePaths: [rejectedFixturePath],
+    },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.rejectedFormatMatrix).toEqual([{
+    name: 'malformed.obj',
+    extension: 'obj',
+    size: (await fs.promises.stat(rejectedFixturePath)).size,
+    rejectedBeforePublication: true,
+  }]);
 });
 
 test('packaged self-test rejects result paths outside the capability directory', async () => {
@@ -273,6 +311,15 @@ test('packaged self-test rejects legacy, duplicate, and oversized fixture capabi
     valid: true,
     configPath: duplicate.configPath,
     tokenDigest: duplicate.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const crossMatrixDuplicate = await writeCapabilityConfig(({ fixturePath }) => ({
+    rejectedFixturePaths: [fixturePath],
+  }));
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: crossMatrixDuplicate.configPath,
+    tokenDigest: crossMatrixDuplicate.tokenDigest,
   })).rejects.toThrow('configuration is invalid');
 
   const oversized = await writeCapabilityConfig({

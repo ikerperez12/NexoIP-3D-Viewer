@@ -16,6 +16,10 @@ import {
   normalizeFilters,
   safeResolveUnder,
 } from './security.js';
+import {
+  isPreflightValidModel,
+  MAX_MODEL_PREFLIGHT_BYTES,
+} from './model-preflight.js';
 
 export const MAX_MODEL_BYTES = 256 * 1024 * 1024;
 
@@ -24,13 +28,6 @@ export const MAX_MODEL_BYTES = 256 * 1024 * 1024;
 // cancellation request and repaint progress during a very dense directory.
 const SCAN_YIELD_INTERVAL = 128;
 const SCAN_CATALOG_PUBLICATION_INTERVAL_MS = 200;
-const MAX_STRUCTURAL_VALIDATION_BYTES = 256 * 1024;
-const GLB_MAGIC = 0x46546C67;
-const GLB_VERSION = 2;
-const GLB_JSON_CHUNK_TYPE = 0x4E4F534A;
-const BINARY_STL_HEADER_BYTES = 84;
-const BINARY_STL_TRIANGLE_BYTES = 50;
-const FBX_BINARY_HEADER = Buffer.from('Kaydara FBX Binary  \0\x1A\0', 'binary');
 const CATALOG_ROOT_ID = 'library';
 const CATALOG_ROOT_ID_PREFIX = 'root-';
 const CATALOG_FOLDER_ID_PREFIX = 'folder-';
@@ -71,10 +68,6 @@ function closeFileHandle(fileHandle) {
 function getDirectoryVisitKey(directoryPath) {
   const normalizedPath = path.normalize(directoryPath);
   return process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
-}
-
-function toText(bytes) {
-  return bytes.toString('utf8').replace(/^\uFEFF/, '');
 }
 
 function isPlainObject(value) {
@@ -194,150 +187,6 @@ function catalogFilterKey(filters) {
     filters.sortBy,
     filters.order,
   ]);
-}
-
-function hasSupportedGltfAsset(document) {
-  return isPlainObject(document)
-    && isPlainObject(document.asset)
-    && typeof document.asset.version === 'string'
-    && /^2(?:\.\d+)?$/.test(document.asset.version);
-}
-
-function isStructurallyValidGltfJson(bytes) {
-  const text = toText(bytes);
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('{') || trimmed.includes('\0')) return false;
-
-  try {
-    return hasSupportedGltfAsset(JSON.parse(trimmed));
-  } catch {
-    return false;
-  }
-}
-
-function isStructurallyValidGlb(bytes, size) {
-  // A header alone is not an asset. GLB 2.0 requires a first JSON chunk whose
-  // declared, four-byte-aligned extent fits the file. Complete bounded JSON
-  // chunks are checked as glTF 2.0 metadata; larger chunks retain the same
-  // prefix-only policy used for oversized .gltf files below.
-  if (bytes.length < 20 || size < 20) return false;
-  const magic = bytes.readUInt32LE(0);
-  const version = bytes.readUInt32LE(4);
-  const declaredLength = bytes.readUInt32LE(8);
-  if (magic !== GLB_MAGIC || version !== GLB_VERSION || declaredLength !== size) return false;
-
-  const jsonChunkLength = bytes.readUInt32LE(12);
-  const jsonChunkType = bytes.readUInt32LE(16);
-  const jsonChunkEnd = 20 + jsonChunkLength;
-  if (jsonChunkType !== GLB_JSON_CHUNK_TYPE
-    || jsonChunkLength === 0
-    || jsonChunkLength % 4 !== 0
-    || jsonChunkEnd > size) {
-    return false;
-  }
-
-  if (jsonChunkEnd <= bytes.length) {
-    if (!isStructurallyValidGltfJson(bytes.subarray(20, jsonChunkEnd))) return false;
-  } else {
-    const jsonPrefix = toText(bytes.subarray(20));
-    const trimmedPrefix = jsonPrefix.trimStart();
-    if (!trimmedPrefix.startsWith('{') || trimmedPrefix.includes('\0')) return false;
-  }
-
-  // When the whole compact GLB was read, ensure every declared chunk fits the
-  // container. A large GLB remains bounded to the first validation window.
-  if (bytes.length < size) return true;
-  let chunkOffset = jsonChunkEnd;
-  while (chunkOffset < size) {
-    if (chunkOffset + 8 > size) return false;
-    const chunkLength = bytes.readUInt32LE(chunkOffset);
-    if (chunkLength % 4 !== 0 || chunkOffset + 8 + chunkLength > size) return false;
-    chunkOffset += 8 + chunkLength;
-  }
-  return chunkOffset === size;
-}
-
-function isStructurallyValidGltf(bytes, size) {
-  // JSON metadata can legitimately be large because data URIs may be embedded.
-  // Keep the scan bounded: reject malformed files when their complete JSON is
-  // available, and retain a plausibly JSON-shaped larger candidate for loader
-  // validation rather than falsely excluding a valid model.
-  if (size > bytes.length) {
-    const text = toText(bytes);
-    const trimmed = text.trimStart();
-    return trimmed.startsWith('{') && !trimmed.includes('\0');
-  }
-  return isStructurallyValidGltfJson(bytes);
-}
-
-function isStructurallyValidObj(bytes) {
-  const text = toText(bytes);
-  if (!text.trim() || text.includes('\0')) return false;
-  return /^(?:v|vn|vt|vp|f|l|p)\s+/m.test(text) || /^mtllib\s+/m.test(text);
-}
-
-function isStructurallyValidPly(bytes) {
-  const text = toText(bytes);
-  return /^ply(?:\r?\n|\r)/.test(text)
-    && /^format\s+(?:ascii|binary_little_endian|binary_big_endian)\s+1\.0\s*$/m.test(text)
-    && /^end_header\s*$/m.test(text);
-}
-
-function isStructurallyValidFbx(bytes) {
-  if (bytes.length >= FBX_BINARY_HEADER.length
-    && bytes.subarray(0, FBX_BINARY_HEADER.length).equals(FBX_BINARY_HEADER)) {
-    return true;
-  }
-
-  const text = toText(bytes);
-  return /^;\s*FBX\b/im.test(text) || /\bFBXHeaderExtension\s*:/m.test(text);
-}
-
-function isStructurallyValidDae(bytes) {
-  const text = toText(bytes);
-  return /<\s*COLLADA(?:\s|>)/i.test(text);
-}
-
-function isStructurallyValidStl(bytes, size) {
-  if (bytes.length >= BINARY_STL_HEADER_BYTES) {
-    const triangleCount = bytes.readUInt32LE(80);
-    const declaredLength = BINARY_STL_HEADER_BYTES + (triangleCount * BINARY_STL_TRIANGLE_BYTES);
-    if (Number.isSafeInteger(declaredLength) && declaredLength === size) {
-      return true;
-    }
-  }
-
-  const text = toText(bytes);
-  const trimmed = text.trimStart();
-  if (!/^solid(?:\s|$)/i.test(trimmed)) return false;
-  if (!/\bfacet\s+normal\b/i.test(text) || !/\bouter\s+loop\b/i.test(text) || !/\bvertex\b/i.test(text)) {
-    return false;
-  }
-  return size > bytes.length || /\bendsolid\b/i.test(text);
-}
-
-// This deliberately verifies only bounded, format-specific structure before
-// publication. The renderer loader remains responsible for full parsing,
-// dependency resolution, and model-fidelity validation when a user opens it.
-function isStructurallyValidModel(filePath, bytes, size) {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.glb':
-      return isStructurallyValidGlb(bytes, size);
-    case '.gltf':
-      return isStructurallyValidGltf(bytes, size);
-    case '.obj':
-      return isStructurallyValidObj(bytes);
-    case '.ply':
-      return isStructurallyValidPly(bytes);
-    case '.fbx':
-      return isStructurallyValidFbx(bytes);
-    case '.dae':
-      return isStructurallyValidDae(bytes);
-    case '.stl':
-      return isStructurallyValidStl(bytes, size);
-    default:
-      return false;
-  }
 }
 
 export class FileScanner {
@@ -479,10 +328,6 @@ export class FileScanner {
       size: record.size,
       modifiedAt: record.modifiedAt,
     };
-  }
-
-  #folderId(relativeFolder) {
-    return createHash('sha256').update(`folder:${relativeFolder}`).digest('hex').slice(0, 24);
   }
 
   #catalogRootId(rootPath) {
@@ -716,12 +561,12 @@ export class FileScanner {
         return null;
       }
 
-      const bytesToRead = Math.min(openedStats.size, MAX_STRUCTURAL_VALIDATION_BYTES);
+      const bytesToRead = Math.min(openedStats.size, MAX_MODEL_PREFLIGHT_BYTES);
       const bytes = Buffer.alloc(bytesToRead);
       const { bytesRead } = bytesToRead > 0
         ? await fileHandle.read(bytes, 0, bytesToRead, 0)
         : { bytesRead: 0 };
-      return isStructurallyValidModel(realPath, bytes.subarray(0, bytesRead), openedStats.size);
+      return isPreflightValidModel(realPath, bytes.subarray(0, bytesRead), openedStats.size);
     } catch {
       return null;
     } finally {
@@ -1306,77 +1151,6 @@ export class FileScanner {
       reset: false,
       model: record ? this.#toDto(record) : null,
     };
-  }
-
-  listModels(filters) {
-    const normalizedFilters = normalizeFilters(filters);
-    const extension = normalizedFilters.extension === 'all' ? '' : normalizedFilters.extension;
-    const query = normalizedFilters.query.toLocaleLowerCase();
-    const multiplier = normalizedFilters.order === 'asc' ? 1 : -1;
-
-    return [...this.recordsById.values()]
-      .filter((record) => !extension || record.extension === `.${extension}`)
-      .filter((record) => !query || record.name.toLocaleLowerCase().includes(query))
-      .sort((left, right) => {
-        const leftValue = left[normalizedFilters.sortBy];
-        const rightValue = right[normalizedFilters.sortBy];
-        if (typeof leftValue === 'string') {
-          return multiplier * leftValue.localeCompare(rightValue);
-        }
-        return multiplier * (leftValue - rightValue);
-      })
-      .map((record) => this.#toDto(record));
-  }
-
-  getTree() {
-    const root = {
-      id: 'library',
-      name: 'Biblioteca local',
-      isFolder: true,
-      filesCount: this.recordsById.size,
-      files: [],
-      children: [],
-    };
-    const nodes = new Map([['', root]]);
-
-    for (const record of this.recordsById.values()) {
-      const relativeDirectory = path.relative(record.rootPath, path.dirname(record.path));
-      const safeRelativeDirectory = relativeDirectory === '' ? '' : relativeDirectory.split(path.sep).join('/');
-      const segments = safeRelativeDirectory && isSafeRelativePath(safeRelativeDirectory)
-        ? safeRelativeDirectory.split('/')
-        : [];
-      let currentKey = '';
-      let currentNode = root;
-
-      for (const segment of segments) {
-        currentKey = currentKey ? `${currentKey}/${segment}` : segment;
-        let child = nodes.get(currentKey);
-        if (!child) {
-          child = {
-            id: this.#folderId(currentKey),
-            name: segment,
-            isFolder: true,
-            filesCount: 0,
-            files: [],
-            children: [],
-          };
-          nodes.set(currentKey, child);
-          currentNode.children.push(child);
-        }
-        child.filesCount += 1;
-        currentNode = child;
-      }
-
-      currentNode.files.push(this.#toDto(record));
-    }
-
-    const sortNode = (node) => {
-      node.children.sort((left, right) => left.name.localeCompare(right.name));
-      node.files.sort((left, right) => left.name.localeCompare(right.name));
-      node.children.forEach(sortNode);
-    };
-    sortNode(root);
-    return root;
   }
 
   getStatus() {

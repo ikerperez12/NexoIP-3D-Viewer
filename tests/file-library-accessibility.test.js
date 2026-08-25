@@ -31,7 +31,7 @@ describe('file library accessibility helpers', () => {
     expect(scanProgressMessage({ status: 'completed', foundModels: 24, skippedEntries: 2, oversizedModels: 1 }, false))
       .toContain('1 elemento no se pudo indexar de forma segura');
     expect(scanProgressMessage({ status: 'completed', foundModels: 24, skippedEntries: 1, invalidModels: 1 }, false))
-      .toContain('1 archivo no supera la comprobación estructural');
+      .toContain('1 archivo no supera la precomprobación de formato y geometría');
     expect(scanProgressMessage({ status: 'cancelled', foundModels: 2 }, false))
       .toContain('Se conservan los modelos');
   });

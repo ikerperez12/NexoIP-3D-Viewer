@@ -1,0 +1,10 @@
+# Default ownership keeps maintenance and security review routing explicit.
+* @ikerperez12
+
+# High-risk release and local-file boundaries.
+/.github/workflows/ @ikerperez12
+/electron/ @ikerperez12
+/scripts/ @ikerperez12
+/SECURITY.md @ikerperez12
+/package.json @ikerperez12
+/package-lock.json @ikerperez12

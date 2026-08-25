@@ -4,11 +4,15 @@ import path from 'node:path';
 import { expect, test, vi } from 'vitest';
 import { FileScanner } from '../electron/file-scanner.js';
 
-const MINIMAL_GLTF = JSON.stringify({ asset: { version: '2.0' } });
+const MINIMAL_GLTF_DOCUMENT = {
+  asset: { version: '2.0' },
+  meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+};
+const MINIMAL_GLTF = JSON.stringify(MINIMAL_GLTF_DOCUMENT);
 const MINIMAL_OBJ = 'o Triangle\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
 
-function minimalGlb(binaryByteLength = 0) {
-  const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+function minimalGlb(binaryByteLength = 0, document = MINIMAL_GLTF_DOCUMENT) {
+  const json = Buffer.from(JSON.stringify(document));
   const paddedJsonLength = Math.ceil(json.length / 4) * 4;
   const paddedBinaryLength = Math.ceil(binaryByteLength / 4) * 4;
   const includesBinaryChunk = paddedBinaryLength > 0;
@@ -32,7 +36,7 @@ function minimalGlb(binaryByteLength = 0) {
 function minimalBinaryFbx() {
   return Buffer.concat([
     Buffer.from('Kaydara FBX Binary  \0\x1A\0', 'binary'),
-    Buffer.alloc(8),
+    Buffer.from('Geometry\0Mesh\0Vertices\0', 'binary'),
   ]);
 }
 
@@ -47,11 +51,11 @@ function validModelContents(filePath) {
     case '.stl':
       return 'solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid triangle\n';
     case '.fbx':
-      return '; FBX 7.4.0 project file\nFBXHeaderExtension: {\n}\n';
+      return '; FBX 7.4.0 project file\nFBXHeaderExtension: {\n}\nGeometry: 1, "Geometry::Triangle", "Mesh" {\nVertices: *9 {\n}\n}\n';
     case '.ply':
-      return 'ply\nformat ascii 1.0\nelement vertex 0\nend_header\n';
+      return 'ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n';
     case '.dae':
-      return '<?xml version="1.0"?><COLLADA version="1.4.1"></COLLADA>';
+      return '<?xml version="1.0"?><COLLADA version="1.4.1"><library_geometries><geometry id="triangle"><mesh><triangles count="1"/></mesh></geometry></library_geometries></COLLADA>';
     default:
       throw new TypeError(`No valid test model fixture for ${filePath}`);
   }
@@ -70,6 +74,20 @@ async function withTemporaryLibrary(callback) {
   }
 }
 
+function listAllModels(scanner, filters) {
+  const items = [];
+  let cursor = null;
+  let revision = null;
+  do {
+    const page = scanner.getCatalogPage({ filters, revision, cursor, limit: 100 });
+    if (page.reset) throw new Error('Catalog changed during a synchronous test snapshot.');
+    revision = page.catalogRevision;
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return items;
+}
+
 test('scanner indexes only supported files and never returns filesystem paths', async () => {
   await withTemporaryLibrary(async (directory) => {
     await fs.promises.mkdir(path.join(directory, 'nested'));
@@ -81,16 +99,16 @@ test('scanner indexes only supported files and never returns filesystem paths', 
     const result = await scanner.scanDirectories([directory]);
     expect(result).toEqual({ status: 'completed', count: 2, truncated: false });
 
-    const models = scanner.listModels({ sortBy: 'name' });
+    const models = listAllModels(scanner, { sortBy: 'name' });
     expect(models).toHaveLength(2);
     expect(Object.keys(models[0]).sort()).toEqual(['extension', 'id', 'modifiedAt', 'name', 'size']);
     expect(models.some((model) => Object.prototype.hasOwnProperty.call(model, 'path'))).toBe(false);
     expect(models[0].id).toMatch(/^[a-f0-9]{48}$/);
     expect(models.map((model) => model.name)).toEqual(['chair.glb', 'mesh.OBJ']);
 
-    const tree = scanner.getTree();
-    expect(JSON.stringify(tree).includes(directory)).toBe(false);
-    expect(tree.filesCount).toBe(2);
+    const roots = scanner.getTreeChildren({ limit: 100 });
+    expect(JSON.stringify(roots).includes(directory)).toBe(false);
+    expect(roots.items.reduce((count, item) => count + item.filesCount, 0)).toBe(2);
   });
 });
 
@@ -124,7 +142,7 @@ test('scanner rejects malformed extension-shaped candidates and accepts lightwei
       count: validPaths.length,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual([
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual([
       'valid-ascii.fbx',
       'valid-binary.fbx',
       'valid.dae',
@@ -150,7 +168,38 @@ test('scanner rejects malformed extension-shaped candidates and accepts lightwei
   });
 });
 
-test('scanner requires a GLB JSON chunk and still accepts the minimal glTF 2.0 container', async () => {
+test('scanner rejects compact geometry-free candidates before publishing them', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const candidates = new Map([
+      ['empty.glb', minimalGlb(0, { asset: { version: '2.0' } })],
+      ['empty.gltf', JSON.stringify({ asset: { version: '2.0' } })],
+      ['empty.obj', 'o EmptyObject\n'],
+      ['empty.stl', 'solid EmptySolid\nendsolid EmptySolid\n'],
+      ['empty.ply', 'ply\nformat ascii 1.0\nelement vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n'],
+      ['empty.fbx', '; FBX 7.4.0 project file\nFBXHeaderExtension: {\n}\n'],
+      ['empty.dae', '<?xml version="1.0"?><COLLADA version="1.4.1"><scene/></COLLADA>'],
+    ]);
+    await Promise.all([...candidates].map(([name, contents]) => (
+      fs.promises.writeFile(path.join(directory, name), contents)
+    )));
+
+    const scanner = new FileScanner();
+    await expect(scanner.scanDirectories([directory])).resolves.toEqual({
+      status: 'completed',
+      count: 0,
+      truncated: false,
+    });
+    expect(scanner.getStatus()).toMatchObject({
+      availableModels: 0,
+      invalidModels: candidates.size,
+      skippedEntries: candidates.size,
+    });
+    await expect(scanner.registerDroppedPath(path.join(directory, 'empty.gltf')))
+      .rejects.toThrow('Invalid dropped file');
+  });
+});
+
+test('scanner requires a GLB JSON chunk and compact renderable glTF 2.0 metadata', async () => {
   await withTemporaryLibrary(async (directory) => {
     const headerOnlyPath = path.join(directory, 'header-only.glb');
     const validPath = path.join(directory, 'minimal.glb');
@@ -169,7 +218,7 @@ test('scanner requires a GLB JSON chunk and still accepts the minimal glTF 2.0 c
       count: 1,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['minimal.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['minimal.glb']);
     expect(scanner.getStatus()).toMatchObject({ invalidModels: 1, foundModels: 1 });
     await expect(scanner.registerDroppedPath(headerOnlyPath)).rejects.toThrow('Invalid dropped file');
   });
@@ -311,7 +360,7 @@ test('scanner indexes models beyond the former depth cap', async () => {
       count: 1,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['deep-model.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['deep-model.glb']);
     expect(scanner.getStatus()).toMatchObject({ scannedDirectories: 15, truncated: false });
   });
 });
@@ -421,7 +470,7 @@ test('scanner does not stop after a very dense directory before a later valid mo
       count: 1,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['late-model.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['late-model.glb']);
     expect(scanner.getStatus()).toMatchObject({
       scannedDirectories: 1,
       skippedEntries: 0,
@@ -560,7 +609,7 @@ test('scanner prevents a repeated directory from making traversal cyclic', async
       truncated: false,
     });
     expect(openCount).toBe(1);
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['model.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['model.glb']);
   });
 });
 
@@ -576,7 +625,7 @@ test('overlapping selected roots index a physical model only once', async () => 
       count: 1,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['single.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['single.glb']);
   });
 });
 
@@ -626,9 +675,9 @@ test('scanner progressively publishes validated models and prunes stale records 
     const scan = scanner.scanDirectories([nextDirectory]);
     await enumerationPaused;
 
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['first.glb', 'previous.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['first.glb', 'previous.glb']);
     expect(await scanner.resolveModelAsset(previous.id, 'asset')).toEqual(minimalGlb());
-    expect(scanner.getTree().filesCount).toBe(2);
+    expect(scanner.getCatalogPage({ limit: 1 }).total).toBe(2);
     expect(scanner.getStatus()).toMatchObject({
       status: 'scanning',
       isScanning: true,
@@ -638,7 +687,7 @@ test('scanner progressively publishes validated models and prunes stale records 
 
     releaseEnumeration();
     await expect(scan).resolves.toMatchObject({ status: 'completed', count: 2 });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['first.glb', 'second.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['first.glb', 'second.glb']);
     expect(scanner.getModelPath(previous.id)).toBeNull();
     expect(scanner.getStatus()).toMatchObject({
       status: 'completed',
@@ -767,7 +816,7 @@ test('cancelling a scan retains both the prior catalog and safely published disc
     releaseEnumeration();
 
     await expect(scan).resolves.toMatchObject({ status: 'cancelled', count: 2 });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['previous.glb', 'staged.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['previous.glb', 'staged.glb']);
     expect(await scanner.resolveModelAsset(previous.id, 'asset')).toEqual(minimalGlb());
     expect(scanner.getStatus()).toMatchObject({
       status: 'cancelled',
@@ -824,7 +873,7 @@ test('a model registered externally during a scan survives selected-root complet
     releaseEnumeration();
 
     await expect(scan).resolves.toMatchObject({ status: 'completed', count: 2 });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['external.glb', 'scanned.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['external.glb', 'scanned.glb']);
     expect(scanner.getModelPath(previous.id)).toBeNull();
     expect(scanner.getModelPath(external.id)).toBe(await fs.promises.realpath(externalPath));
     expect(scanner.getStatus()).toMatchObject({
@@ -844,8 +893,8 @@ test('scanner preserves an opaque ID when the same file identity is rescanned', 
 
     await scanner.scanDirectories([directory]);
 
-    expect(scanner.listModels()).toHaveLength(1);
-    expect(scanner.listModels()[0].id).toBe(dropped.id);
+    expect(listAllModels(scanner)).toHaveLength(1);
+    expect(listAllModels(scanner)[0].id).toBe(dropped.id);
   });
 });
 
@@ -859,8 +908,8 @@ test('scanner rotates the opaque ID when a rescanned file identity changes', asy
     await writeValidModel(modelPath, minimalGlb(20));
     await scanner.scanDirectories([directory]);
 
-    expect(scanner.listModels()).toHaveLength(1);
-    expect(scanner.listModels()[0].id).not.toBe(previous.id);
+    expect(listAllModels(scanner)).toHaveLength(1);
+    expect(listAllModels(scanner)[0].id).not.toBe(previous.id);
   });
 });
 
@@ -888,7 +937,7 @@ test('OBJ material sidecars are allowed but executable or document sidecars are 
     const materialPath = path.join(directory, 'mesh.mtl');
     const deniedPath = path.join(directory, 'notes.txt');
     await Promise.all([
-      fs.promises.writeFile(modelPath, 'mtllib mesh.mtl\nv 0 0 0\n'),
+      fs.promises.writeFile(modelPath, 'mtllib mesh.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'),
       fs.promises.writeFile(materialPath, 'newmtl Safe\nKd 1 1 1\n'),
       fs.promises.writeFile(deniedPath, 'private notes'),
     ]);
@@ -1094,7 +1143,7 @@ test('cancellation creates a fresh revision while retaining safely published rec
     await expect(scan).resolves.toMatchObject({ status: 'cancelled' });
     const statusAfterCancellation = scanner.getStatus();
     expect(statusAfterCancellation.catalogRevision).toBeGreaterThan(revisionBeforeCancellation);
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['previous.glb', 'staged.glb']);
+    expect(listAllModels(scanner).map((model) => model.name)).toEqual(['previous.glb', 'staged.glb']);
     expect(scanner.getCatalogPage({ revision: revisionBeforeCancellation })).toMatchObject({
       reset: true,
       items: [],

@@ -25,7 +25,7 @@ Export remains alpha. GLB exports the clean imported clone rather than viewport 
 - IPC validates sender, top frame, origin, types, sizes and identifiers. No filesystem path is exposed to renderer code.
 - Navigation, pop-ups, webviews, permissions, remote subresources and production debugging switches are denied.
 - Asset reads are allowlisted, size-bounded, contained after canonicalisation and served without a check-then-reopen race.
-- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can pass the bounded structural preflight within the per-asset safety policy is discovered under the folders the user explicitly selects; those prechecked entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. Opening an entry still requires the loader's full parse and resource checks. No automatic disk scan, telemetry, analytics, account or network service is introduced.
+- Folder indexing is opt-in, cancellable and root-contained. Every compatible model that can pass the bounded format and compact-geometry preflight within the per-asset safety policy is discovered under the folders the user explicitly selects; those prechecked entries are published progressively through bounded, revisioned pages without exposing paths or retransferring the entire library. Opening an entry still requires the loader's full parse and resource checks. No automatic disk scan, telemetry, analytics, account or network service is introduced.
 - Exact dependencies and immutable GitHub Actions references pass dependency audit, read-only pull-request dependency review, CodeQL and secret scanning.
 - The release SBOM identifies the Electron/Chromium runtime that is actually distributed, and both binaries and SBOM have build provenance.
 - Every NexoIP-owned executable is Authenticode-signed with the expected publisher identity and a trusted timestamp. Runtime PE signatures are inventoried and verified against an explicit vendor policy. `NotSigned` on a project-owned executable is a hard release failure.
@@ -33,7 +33,7 @@ Export remains alpha. GLB exports the clean imported clone rather than viewport 
 
 ### 2. Format correctness and resource safety
 
-- Each advertised format has a small, redistributable positive fixture. Source-level malformed or geometry-free negatives now cover glTF, OBJ, STL, PLY, FBX and DAE; expand these into a packaged hostile-input matrix before stable.
+- Each advertised format has a small, redistributable positive fixture. The source and packaged executable matrices cover six truncated or geometry-free glTF, OBJ, STL, PLY, FBX and DAE negatives and require rejection before catalog publication. Expand hostile coverage with decompression-heavy and dependency-failure cases before stable.
 - A per-load aggregate source budget bounds streamed model resources and requests (including local sidecars and decoder assets), while a decoded-resource budget covers node depth/count, vertices, triangles, materials, animations, textures and total texture pixels.
 - Oversized, deeply nested, truncated and decompression-heavy inputs fail with a recoverable message rather than leaving stale content or an unusable shell.
 - Loading and scanning can be cancelled. Switching models cannot commit an obsolete load.
@@ -71,7 +71,7 @@ Export remains alpha. GLB exports the clean imported clone rather than viewport 
 
 Only after every gate is satisfied may the project remove the alpha warning and publish a stable GitHub Release.
 
-Current evidence: on the development Windows host, the unpacked executable plus freshly built NSIS and portable artifacts all load the same ten representative scenarios across every advertised extension, including Draco, Meshopt and KTX2/Basis, through the local renderer and opaque-ID model protocol. The guarded NSIS smoke installs, self-tests and uninstalls in a unique temporary directory; the portable smoke uses the same capability contract. Both leave no NexoIP process or smoke root behind. The packaged self-test also exercises targeted keyboard, semantic and no-global-overflow invariants at 900x600 and 200% browser zoom; this is not a complete WCAG conformance audit. Clean-profile Windows 10/11, assistive-technology and constrained-GPU evidence remains open for stable.
+Current evidence: on the development Windows host, the unpacked executable plus freshly built NSIS and portable artifacts all load the same ten representative scenarios across every advertised extension, including Draco, Meshopt and KTX2/Basis, through the local renderer and opaque-ID model protocol. All three forms also reject the six compact hostile matrix candidates before catalog publication. The guarded NSIS smoke installs, self-tests and uninstalls in a unique temporary directory; the portable smoke uses the same capability contract. Both leave no NexoIP process or smoke root behind. The packaged self-test also exercises targeted keyboard, semantic and no-global-overflow invariants at 900x600 and 200% browser zoom; this is not a complete WCAG conformance audit. Clean-profile Windows 10/11, assistive-technology and constrained-GPU evidence remains open for stable.
 
 ## Explicit non-goals for the first stable release
 

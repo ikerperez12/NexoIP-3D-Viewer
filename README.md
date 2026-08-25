@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  A private, offline-first desktop viewer for inspecting local 3D assets on Windows.
+  A privacy-first, offline desktop viewer for inspecting local 3D assets on Windows.
 </p>
 
 <p align="center">
@@ -31,9 +31,9 @@ Screenshot model: [Industrial Microscope by Lukas Walzer on Poly Haven](https://
 
 ## What the alpha does
 
-NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app. Discovery is progressive: the first compatible model that passes a bounded structural preflight becomes available immediately, and further discoveries are published in brief batches while a selected folder is still being scanned. Opening an entry always runs the format loader's full parse and resource checks. The renderer receives bounded, revisioned catalog pages and opens folder nodes lazily, so a growing library is not copied wholesale for each refresh. There is no arbitrary cap on selected-folder depth, entry count, or model count; regular-file, canonical-path, per-file-size, and structural-preflight safeguards still apply.
+NexoIP 3D Viewer opens and inspects local 3D assets without uploading them or starting a local web server. Add only the folders you choose, browse the resulting private catalog, or drag a compatible file directly into the app. Discovery is progressive: the first compatible model that passes a bounded format and compact-geometry preflight becomes available immediately, and further discoveries are published in brief batches while a selected folder is still being scanned. Opening an entry always runs the format loader's full parse and resource checks. The renderer receives bounded, revisioned catalog pages and opens folder nodes lazily, so a growing library is not copied wholesale for each refresh. There is no arbitrary cap on selected-folder depth, entry count, or model count; regular-file, canonical-path, per-file-size, and preflight safeguards still apply.
 
-The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`. The source and packaged matrices now exercise all seven extensions through ten real loads: animated GLB, external-buffer/textured glTF, required `EXT_meshopt_compression`, Draco, KTX2/Basis, textured multi-MTL OBJ, ASCII STL (with separate binary-colour unit coverage), static FBX, coloured PLY, and centimetre/Z-up textured/animated DAE. Those checks prove these representative paths inside the EXE; they do not promise complete scene, material, animation, or export fidelity for every file in a format. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
+The alpha recognises `.glb`, `.gltf`, `.obj`, `.stl`, `.fbx`, `.ply`, and `.dae`. The source and packaged matrices now exercise all seven extensions through ten real loads: animated GLB, external-buffer/textured glTF, required `EXT_meshopt_compression`, Draco, KTX2/Basis, textured multi-MTL OBJ, ASCII STL (with separate binary-colour unit coverage), static FBX, coloured PLY, and centimetre/Z-up textured/animated DAE. The packaged executable also proves that six truncated or geometry-free glTF/OBJ/STL/PLY/FBX/DAE candidates are rejected before catalog publication. Those checks prove these representative paths inside the EXE; they do not promise complete scene, material, animation, or export fidelity for every file in a format. See the [current support matrix and stable-release contract](docs/PRODUCT_READINESS.md) before relying on a format.
 
 - PBR, wireframe, normals, X-ray, and unlit render modes.
 - Perspective and orthographic cameras, standard views, grid, axes, auto-rotation, and camera reset.
@@ -121,9 +121,9 @@ npm run dist:win
 npm run test:release-artifacts
 ```
 
-`npm run test:e2e` and the hosted `npm run test:smoke:ci` gate verify every Electron 43 fuse, prove that the distributed executable rejects debugging transports, start the real packaged application without CDP, exercise the preload bridge and private `nexoip://` model protocol, and load ten real fixture scenarios covering every advertised extension plus Draco, Meshopt and KTX2/Basis decoding. They also verify the four bundled Draco/Basis runtime files. The packaged self-test records targeted evidence at a 900x600 window and 200% browser zoom: essential actions remain reachable, global overflow is absent, and the discrete camera keyboard alternatives respond. This is a focused regression gate, not a WCAG conformance claim.
+`npm run test:e2e` and the hosted `npm run test:smoke:ci` gate verify every Electron 43 fuse, prove that the distributed executable rejects debugging transports, start the real packaged application without CDP, exercise the preload bridge and private `nexoip://` model protocol, load ten real fixture scenarios covering every advertised extension plus Draco, Meshopt and KTX2/Basis decoding, and reject six hostile compact candidates before catalog publication. They also verify the four bundled Draco/Basis runtime files. The packaged self-test records targeted evidence at a 900x600 window and 200% browser zoom: essential actions remain reachable, global overflow is absent, and the discrete camera keyboard alternatives respond. This is a focused regression gate, not a WCAG conformance claim.
 
-After `npm run dist:win`, `npm run test:release-artifacts` refuses to run when it detects an existing NexoIP installation state, silently installs NSIS into unique temporary install and data directories on the guarded host profile, runs the same ten-load capability matrix, removes the state it created, and exercises the portable executable. Loader unit tests use a redistributable, SHA-256-pinned corpus for animated GLB, external glTF, required Meshopt/Draco/KTX2, textured multi-MTL OBJ, textured/animated DAE, static FBX, STL and PLY; fixture provenance is recorded beside the corpus.
+After `npm run dist:win`, `npm run test:release-artifacts` refuses to run when it detects an existing NexoIP installation state, silently installs NSIS into unique temporary install and data directories on the guarded host profile, runs the same ten-load and six-rejection capability matrix, removes the state it created, and exercises the portable executable. Loader unit tests use a redistributable, SHA-256-pinned corpus for animated GLB, external glTF, required Meshopt/Draco/KTX2, textured multi-MTL OBJ, textured/animated DAE, static FBX, STL and PLY; fixture provenance is recorded beside the corpus.
 
 These are alpha baseline checks. They do not yet prove complete fidelity for every variant of each format, WCAG 2.2 AA at Windows scaling extremes, long-running GPU stability, a clean Windows 10/11 test matrix, or Authenticode identity. The additional required evidence is tracked in [Product readiness](docs/PRODUCT_READINESS.md).
 
@@ -139,6 +139,6 @@ These are alpha baseline checks. They do not yet prove complete fidelity for eve
 
 ## Contributing and license
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before proposing a change. Security problems belong in a private report, not a public issue.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before proposing a change. Security problems belong in a private report, not a public issue. The self-contained [AI/contributor readiness audit](reports/index.html) records the latest AgentRC assessment and explicitly separates heuristic gaps from product release gates.
 
 Released under the [MIT License](LICENSE). Bundled components retain their licenses and attribution in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). Copyright © 2026 Iker Perez / NexoIP.

@@ -44,7 +44,7 @@ npm run check
 - Unit/integration files live in `tests/` as `*.test.js` or `*.test.jsx`; packaged Playwright uses `tests/e2e/*.spec.mjs`.
 - Vitest mocks boundary dependencies with `vi.fn`, dependency injection and temporary directories.
 - Fixtures must be redistributable, attributed and SHA-256 pinned; deterministic temporary binary fixtures carry their expected hash in the fixture generator (`tests/fixtures/README.md`, `tests/fixtures/format-matrix/SHA256SUMS.txt`, `scripts/packaged-fixture-matrix.mjs`).
-- [TODO] No coverage provider or numeric threshold is currently configured.
+- `npm run test:coverage` uses the pinned V8 provider and fails below the measured global baseline in `vite.config.mjs`. Electron/preload and renderer bootstrap entrypoints are excluded because importing them outside their real host is unsafe; packaged smoke is their executable counterpart.
 
 ## 6) Evidence
 

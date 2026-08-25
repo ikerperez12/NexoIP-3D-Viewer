@@ -440,6 +440,26 @@ function createLoadingManagerBarrier(manager, signal, sourceBudget = null) {
   };
 }
 
+async function parseWithSidecars({
+  manager,
+  sourceBudget,
+  parse,
+  dispose,
+  preferBudgetFailure = true,
+}) {
+  const sidecars = createLoadingManagerBarrier(manager, sourceBudget.signal, sourceBudget);
+  let value;
+  try {
+    value = await parse();
+    await sidecars.wait();
+    return value;
+  } catch (error) {
+    sidecars.cancel();
+    dispose?.(value);
+    throw preferBudgetFailure ? sourceBudget?.failure || error : error;
+  }
+}
+
 async function fetchArrayBuffer(url, onProgress, signal, sourceBudget = null) {
   const effectiveSignal = sourceBudget?.signal || signal;
   throwIfAborted(effectiveSignal);
@@ -725,18 +745,17 @@ async function loadGltf(url, onProgress, { renderer, signal, sourceBudget }) {
     .setMeshoptDecoder(MeshoptDecoder);
   if (renderer) loader.setKTX2Loader(ktx2Loader);
 
-  const sidecars = createLoadingManagerBarrier(manager, sourceBudget.signal, sourceBudget);
-  let gltf;
   try {
-    const buffer = await fetchArrayBuffer(url, onProgress, signal, sourceBudget);
-    throwIfAborted(signal);
-    gltf = await raceWithAbort(loader.parseAsync(buffer, baseUrl), sourceBudget.signal);
-    await sidecars.wait();
-    return gltf;
-  } catch (error) {
-    sidecars.cancel();
-    if (gltf?.scene) disposeModelResources(gltf.scene);
-    throw sourceBudget?.failure || error;
+    return await parseWithSidecars({
+      manager,
+      sourceBudget,
+      async parse() {
+        const buffer = await fetchArrayBuffer(url, onProgress, signal, sourceBudget);
+        throwIfAborted(signal);
+        return raceWithAbort(loader.parseAsync(buffer, baseUrl), sourceBudget.signal);
+      },
+      dispose: (gltf) => disposeModelResources(gltf?.scene),
+    });
   } finally {
     dracoLoader.dispose();
     ktx2Loader.dispose();
@@ -782,17 +801,13 @@ async function loadObj(url, onProgress, signal, sourceBudget) {
     loader.setMaterials(materials);
   }
 
-  const sidecars = createLoadingManagerBarrier(manager, sourceBudget.signal, sourceBudget);
-  let object;
-  try {
-    object = loader.parse(text);
-    await sidecars.wait();
-    return object;
-  } catch (error) {
-    sidecars.cancel();
-    if (object) disposeModelResources(object);
-    throw error;
-  }
+  return parseWithSidecars({
+    manager,
+    sourceBudget,
+    parse: () => loader.parse(text),
+    dispose: disposeModelResources,
+    preferBudgetFailure: false,
+  });
 }
 
 async function loadStl(url, fileName, onProgress, signal, sourceBudget) {
@@ -824,17 +839,13 @@ async function loadFbx(url, onProgress, signal, sourceBudget) {
   const manager = createLocalLoadingManager(baseUrl, [], sourceBudget, signal);
   manager.addHandler(/\.tga$/i, new TGALoader(manager));
   const buffer = await fetchArrayBuffer(url, onProgress, signal, sourceBudget);
-  const sidecars = createLoadingManagerBarrier(manager, sourceBudget.signal, sourceBudget);
-  let group;
-  try {
-    group = new FBXLoader(manager).parse(buffer, baseUrl);
-    await sidecars.wait();
-    return { group, animations: group.animations || [] };
-  } catch (error) {
-    sidecars.cancel();
-    if (group) disposeModelResources(group);
-    throw sourceBudget?.failure || error;
-  }
+  const group = await parseWithSidecars({
+    manager,
+    sourceBudget,
+    parse: () => new FBXLoader(manager).parse(buffer, baseUrl),
+    dispose: disposeModelResources,
+  });
+  return { group, animations: group.animations || [] };
 }
 
 async function loadPly(url, fileName, onProgress, signal, sourceBudget) {
@@ -875,17 +886,12 @@ async function loadDae(url, onProgress, signal, sourceBudget) {
   const baseUrl = getBaseUrl(url);
   const manager = createLocalLoadingManager(baseUrl, [], sourceBudget, signal);
   const text = new TextDecoder().decode(await fetchArrayBuffer(url, onProgress, signal, sourceBudget));
-  const sidecars = createLoadingManagerBarrier(manager, sourceBudget.signal, sourceBudget);
-  let collada;
-  try {
-    collada = new ColladaLoader(manager).parse(text, baseUrl);
-    await sidecars.wait();
-    return collada;
-  } catch (error) {
-    sidecars.cancel();
-    if (collada?.scene) disposeModelResources(collada.scene);
-    throw sourceBudget?.failure || error;
-  }
+  return parseWithSidecars({
+    manager,
+    sourceBudget,
+    parse: () => new ColladaLoader(manager).parse(text, baseUrl),
+    dispose: (collada) => disposeModelResources(collada?.scene),
+  });
 }
 
 function eachObjectIterative(rootObject, visitor) {

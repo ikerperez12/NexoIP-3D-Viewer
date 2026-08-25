@@ -8,12 +8,12 @@
 
 ```powershell
 npm test
+npm run test:coverage
 npm run check
 npm run test:smoke:ci
 npm run test:e2e
 npm run dist:win
 npm run test:release-artifacts
-# [TODO] no coverage command is configured
 ```
 
 ## 2) Test Layout
@@ -29,7 +29,7 @@ npm run test:release-artifacts
 | --- | --- | --- | --- |
 | Unit | Yes | URL/path validation, camera helpers, budgets, UI helpers | Runs in Vitest Node environment |
 | Integration | Yes | FileScanner with real temp files, real Three.js loaders, GLB/STL/OBJ export round trips, release-script cleanup | Some browser primitives are mocked for Node |
-| Packaged smoke | Yes, targeted | Real Electron executable, fuses, local origin, preload, protocol, runtime files, 900x600/200% invariants and ten real format loads | Covers a representative GLB, glTF, OBJ, STL, FBX, PLY and DAE path plus Meshopt, Draco and KTX2; not full format-fidelity certification |
+| Packaged smoke | Yes, targeted | Real Electron executable, fuses, local origin, preload, protocol, runtime files, 900x600/200% invariants, ten real format loads and six pre-publication hostile rejections | Covers a representative GLB, glTF, OBJ, STL, FBX, PLY and DAE path plus Meshopt, Draco and KTX2; not full format-fidelity certification |
 | Installer/portable | Yes, guarded host | NSIS install, capability test, uninstall and portable | Not a clean Windows profile matrix |
 | Full WCAG / GPU endurance | No | Assistive technology, Windows scaling and repeated GPU lifecycle | Required before stable release |
 
@@ -44,10 +44,10 @@ npm run test:release-artifacts
 
 ## 5) Coverage and Quality Signals
 
-- Coverage provider + threshold: [TODO] none installed (`npm ls @vitest/coverage-v8 c8 nyc --depth=0` returns empty).
-- Current local evidence for this hardening worktree: 30 suites and 165 tests passed through `npm run check`; focused worker-protocol tests cover channel, capability, schema and single-initialization rejection, export tests round-trip GLB/STL/OBJ through production loaders, every advertised format has a pinned malformed or geometry-free source-level negative, and the packaged matrix proves real KTX2 decoding. The final PR/release commit must rerun the same gate.
+- Coverage provider + threshold: pinned `@vitest/coverage-v8` with global floors of 48% statements, 50% branches, 49% functions and 50% lines. The measured baseline is higher; `npm run check` enforces the floor without pretending that host entrypoints are safely unit-importable.
+- Current local evidence for this hardening worktree: focused worker-protocol tests cover channel, capability, schema and single-initialization rejection; export tests round-trip GLB/STL/OBJ through production loaders; every advertised format has a pinned malformed or geometry-free negative; and the packaged matrix proves real KTX2 decoding plus six hostile pre-publication rejections. The final PR/release commit must rerun the complete gate.
 - CI additionally builds and runs the packaged Windows smoke; CodeQL runs `security-extended` queries.
-- Known gaps: broader per-format fidelity and a packaged hostile-input matrix, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
+- Known gaps: broader per-format fidelity and decompression/dependency hostile cases, Windows 10/11 clean profiles, assistive technology, constrained GPU and long-running GPU resource baselines (`docs/PRODUCT_READINESS.md`).
 
 ## 6) Evidence
 

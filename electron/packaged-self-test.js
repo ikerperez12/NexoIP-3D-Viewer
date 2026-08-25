@@ -7,6 +7,7 @@ import { isPathInside, isSupportedModelPath } from './security.js';
 const MAX_CONFIG_BYTES = 16 * 1024;
 const MAX_ASSET_PROBE_BYTES = 64 * 1024;
 const MAX_FIXTURE_PATHS = 12;
+const MAX_REJECTION_FIXTURE_PATHS = 12;
 const MODEL_LOAD_TIMEOUT_MS = 20_000;
 const TEMP_CONFIG_PATTERN = /^nexoip-packaged-self-test-[a-f0-9]+\.json$/;
 const TEMP_RESULT_PATTERN = /^result-[a-f0-9]+\.json$/;
@@ -64,6 +65,7 @@ async function canonicalTemporaryConfigPath(configPath) {
 
 async function validateConfig(config, configPath, expectedDigest) {
   const hasScreenshotPath = Object.hasOwn(config || {}, 'screenshotPath');
+  const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
   if (!isPlainObject(config)
     || config.version !== 2
     || typeof config.token !== 'string'
@@ -72,6 +74,11 @@ async function validateConfig(config, configPath, expectedDigest) {
     || config.fixturePaths.length === 0
     || config.fixturePaths.length > MAX_FIXTURE_PATHS
     || config.fixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
+    || !Array.isArray(rejectedFixturePaths)
+    || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS
+    || rejectedFixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
       || !path.isAbsolute(fixturePath)
       || !isSupportedModelPath(fixturePath))
     || typeof config.resultPath !== 'string'
@@ -90,11 +97,13 @@ async function validateConfig(config, configPath, expectedDigest) {
   let resultDirectory;
   let screenshotDirectory;
   let fixturePaths;
+  let canonicalRejectedFixturePaths;
   try {
-    [configDirectory, resultDirectory, fixturePaths] = await Promise.all([
+    [configDirectory, resultDirectory, fixturePaths, canonicalRejectedFixturePaths] = await Promise.all([
       fs.promises.realpath(path.dirname(configPath)),
       fs.promises.realpath(path.dirname(config.resultPath)),
       Promise.all(config.fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+      Promise.all(rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
     ]);
     if (hasScreenshotPath) {
       screenshotDirectory = await fs.promises.realpath(path.dirname(config.screenshotPath));
@@ -107,10 +116,11 @@ async function validateConfig(config, configPath, expectedDigest) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
-  const uniqueFixturePaths = new Set(fixturePaths.map((fixturePath) => (
+  const allFixturePaths = [...fixturePaths, ...canonicalRejectedFixturePaths];
+  const uniqueFixturePaths = new Set(allFixturePaths.map((fixturePath) => (
     process.platform === 'win32' ? fixturePath.toLowerCase() : fixturePath
   )));
-  if (uniqueFixturePaths.size !== fixturePaths.length) {
+  if (uniqueFixturePaths.size !== allFixturePaths.length) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
@@ -122,6 +132,7 @@ async function validateConfig(config, configPath, expectedDigest) {
 
   return {
     fixturePaths,
+    rejectedFixturePaths: canonicalRejectedFixturePaths,
     resultPath: path.join(resultDirectory, path.basename(config.resultPath)),
     screenshotPath: hasScreenshotPath
       ? path.join(screenshotDirectory, path.basename(config.screenshotPath))
@@ -581,6 +592,7 @@ export async function loadPackagedSelfTestConfig(request) {
 
 export async function runPackagedSelfTest({ scanner, config, renderer, window: applicationWindow }) {
   const startedAt = new Date().toISOString();
+  const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
   const report = {
     version: 2,
     status: 'failed',
@@ -591,7 +603,9 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
   try {
     if (!Array.isArray(config?.fixturePaths)
       || config.fixturePaths.length === 0
-      || config.fixturePaths.length > MAX_FIXTURE_PATHS) {
+      || config.fixturePaths.length > MAX_FIXTURE_PATHS
+      || !Array.isArray(rejectedFixturePaths)
+      || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS) {
       throw new Error('The packaged self-test fixture matrix is invalid.');
     }
 
@@ -884,10 +898,12 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     assertPackagedAccessibilityEvidence(accessibilityResponsive);
 
     const formatMatrix = [];
+    const rejectedFormatMatrix = [];
     let totalModelBytes = 0;
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
       formatMatrix,
+      rejectedFormatMatrix,
       preloadContract: {
         available: true,
         modelCount: 0,
@@ -897,6 +913,39 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       bundledRuntimes: rendererChecks.bundledRuntimes,
       accessibilityResponsive,
     };
+    for (let fixtureIndex = 0; fixtureIndex < rejectedFixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = rejectedFixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let rejectedBeforePublication = false;
+      try {
+        await scanner.registerDroppedPath(fixturePath);
+      } catch (error) {
+        rejectedBeforePublication = error instanceof TypeError && error.message === 'Invalid dropped file.';
+        if (!rejectedBeforePublication) {
+          throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} did not reach the expected validation boundary.`, {
+            cause: error,
+          });
+        }
+      }
+      if (!rejectedBeforePublication) {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} entered the model catalog.`);
+      }
+      rejectedFormatMatrix.push({
+        name: path.basename(fixturePath),
+        extension: path.extname(fixturePath).slice(1).toLowerCase(),
+        size: fixtureStats.size,
+        rejectedBeforePublication: true,
+      });
+    }
     for (let fixtureIndex = 0; fixtureIndex < config.fixturePaths.length; fixtureIndex += 1) {
       const fixturePath = config.fixturePaths[fixtureIndex];
       let fixtureStats;

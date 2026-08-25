@@ -52,6 +52,15 @@ export const PACKAGED_FIXTURE_MATRIX = Object.freeze([
   }),
 ]);
 
+export const PACKAGED_REJECTION_MATRIX = Object.freeze([
+  Object.freeze({ scenario: 'gltf-truncated', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.gltf' }),
+  Object.freeze({ scenario: 'obj-geometry-free', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.obj' }),
+  Object.freeze({ scenario: 'stl-geometry-free', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.stl' }),
+  Object.freeze({ scenario: 'ply-geometry-free', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.ply' }),
+  Object.freeze({ scenario: 'fbx-geometry-free', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.fbx' }),
+  Object.freeze({ scenario: 'dae-geometry-free', relativePath: 'tests/fixtures/format-matrix/invalid/malformed.dae' }),
+]);
+
 function fixtureName(fixture) {
   return fixture.name || path.basename(fixture.relativePath);
 }
@@ -126,6 +135,15 @@ export function resolvePackagedFixtureMatrix(repositoryDirectory = DEFAULT_REPOS
   }));
 }
 
+export function resolvePackagedRejectionMatrix(repositoryDirectory = DEFAULT_REPOSITORY_DIRECTORY) {
+  return PACKAGED_REJECTION_MATRIX.map((fixture) => ({
+    ...fixture,
+    fixturePath: path.resolve(repositoryDirectory, ...fixture.relativePath.split('/')),
+    name: fixtureName(fixture),
+    extension: fixtureExtension(fixture),
+  }));
+}
+
 export function assertPackagedFixtureFiles(repositoryDirectory = DEFAULT_REPOSITORY_DIRECTORY) {
   const fixtures = resolvePackagedFixtureMatrix(repositoryDirectory);
   for (const fixture of fixtures) {
@@ -142,9 +160,26 @@ export function assertPackagedFixtureFiles(repositoryDirectory = DEFAULT_REPOSIT
   return fixtures;
 }
 
+export function assertPackagedRejectionFiles(repositoryDirectory = DEFAULT_REPOSITORY_DIRECTORY) {
+  const fixtures = resolvePackagedRejectionMatrix(repositoryDirectory);
+  for (const fixture of fixtures) {
+    let stats;
+    try {
+      stats = fs.statSync(fixture.fixturePath);
+    } catch {
+      throw new Error(`Missing packaged rejection fixture for scenario ${fixture.scenario}.`);
+    }
+    if (!stats.isFile() || stats.size === 0) {
+      throw new Error(`Packaged rejection fixture is not a non-empty file for scenario ${fixture.scenario}.`);
+    }
+  }
+  return fixtures;
+}
+
 export async function preparePackagedFixtureMatrix(repositoryDirectory = DEFAULT_REPOSITORY_DIRECTORY) {
   const persistedFixtures = new Map(assertPackagedFixtureFiles(repositoryDirectory)
     .map((fixture) => [fixture.scenario, fixture]));
+  const rejectedFixtures = assertPackagedRejectionFiles(repositoryDirectory);
   const temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'nexoip-format-matrix-'));
   try {
     const fixtures = [];
@@ -168,6 +203,7 @@ export async function preparePackagedFixtureMatrix(repositoryDirectory = DEFAULT
 
     return {
       fixtures,
+      rejectedFixtures,
       async cleanup() {
         await fs.promises.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
       },
@@ -175,6 +211,28 @@ export async function preparePackagedFixtureMatrix(repositoryDirectory = DEFAULT
   } catch (error) {
     await fs.promises.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
     throw error;
+  }
+}
+
+export function assertPackagedRejectionMatrixReport(report, artifactLabel = 'Packaged application') {
+  const actualMatrix = report?.checks?.rejectedFormatMatrix;
+  if (!Array.isArray(actualMatrix) || actualMatrix.length !== PACKAGED_REJECTION_MATRIX.length) {
+    throw new Error(`${artifactLabel} did not report every packaged rejection scenario.`);
+  }
+
+  for (let index = 0; index < PACKAGED_REJECTION_MATRIX.length; index += 1) {
+    const expected = PACKAGED_REJECTION_MATRIX[index];
+    const actual = actualMatrix[index];
+    const valid = actual?.name === fixtureName(expected)
+      && actual?.extension === fixtureExtension(expected)
+      && Number.isSafeInteger(actual?.size) && actual.size > 0
+      && actual?.rejectedBeforePublication === true;
+    if (!valid) {
+      throw new Error(`${artifactLabel} failed packaged rejection scenario ${expected.scenario}.`);
+    }
+    if (Object.hasOwn(actual, 'path') || Object.hasOwn(actual, 'fixturePath')) {
+      throw new Error(`${artifactLabel} exposed a local rejection-fixture path.`);
+    }
   }
 }
 

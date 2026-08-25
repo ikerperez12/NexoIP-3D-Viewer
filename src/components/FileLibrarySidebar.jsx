@@ -32,7 +32,7 @@ export function scanProgressMessage(scanStatus, isScanning) {
       const remainingSkipped = skippedEntries - oversizedModels - invalidModels;
       const details = [];
       if (oversizedModels > 0) details.push(`${oversizedModels} ${oversizedModels === 1 ? 'archivo supera' : 'archivos superan'} los 256 MB que el visor puede abrir de forma segura.`);
-      if (invalidModels > 0) details.push(`${invalidModels} ${invalidModels === 1 ? 'archivo no supera' : 'archivos no superan'} la comprobación estructural del formato.`);
+      if (invalidModels > 0) details.push(`${invalidModels} ${invalidModels === 1 ? 'archivo no supera' : 'archivos no superan'} la precomprobación de formato y geometría.`);
       if (remainingSkipped > 0) details.push(`${remainingSkipped} ${remainingSkipped === 1 ? 'elemento no se pudo indexar' : 'elementos no se pudieron indexar'} de forma segura.`);
       return details.length
         ? `Escaneo terminado: ${foundModels} modelos compatibles indexados. ${details.join(' ')}`
@@ -204,7 +204,7 @@ export default function FileLibrarySidebar({
           <button type="button" onClick={refresh} disabled={!bridgeAvailable || isRefreshing} className="min-h-9 min-w-9 rounded-lg border border-white/20 p-2 text-gray-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60" aria-label="Actualizar biblioteca"><RefreshCw size={15} aria-hidden="true" className={isRefreshing ? 'animate-spin' : ''} /></button>
         </div>
         <div id="scan-status" className="space-y-1 text-[11px]" role="status" aria-live="polite" aria-atomic="true"><div className="flex items-start justify-between gap-2 text-gray-200"><span>{statusMessage}</span><span className="shrink-0 font-mono font-bold text-emerald-200">{totalCached} modelos</span></div>{isScanning && <progress className="h-2 w-full accent-amber-400" aria-label="Escaneo local en curso" />}{!bridgeAvailable && <span className="block text-amber-100">Disponible solo desde la aplicación de escritorio.</span>}</div>
-        <p id="scan-preflight-note" className="mt-1 text-[10px] leading-relaxed text-gray-300">La precomprobación estructural filtra candidatos inseguros; al abrirlos, el cargador valida el modelo completo y sus recursos.</p>
+        <p id="scan-preflight-note" className="mt-1 text-[10px] leading-relaxed text-gray-300">La precomprobación descarta archivos compactos malformados o sin geometría; al abrirlos, el cargador valida el modelo completo y sus recursos.</p>
       </div>
 
       <div className="border-b border-white/10 p-3">

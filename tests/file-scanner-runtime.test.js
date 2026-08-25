@@ -5,10 +5,13 @@ import { Readable } from 'node:stream';
 import { expect, test, vi } from 'vitest';
 import { FileScanner, MAX_MODEL_BYTES } from '../electron/file-scanner.js';
 
-const MINIMAL_GLTF = JSON.stringify({ asset: { version: '2.0' } });
+const MINIMAL_GLTF = JSON.stringify({
+  asset: { version: '2.0' },
+  meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+});
 
 function minimalGlb(binaryByteLength = 0) {
-  const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+  const json = Buffer.from(MINIMAL_GLTF);
   const paddedJsonLength = Math.ceil(json.length / 4) * 4;
   const paddedBinaryLength = Math.ceil(binaryByteLength / 4) * 4;
   const includesBinaryChunk = paddedBinaryLength > 0;
@@ -108,7 +111,7 @@ test('an oversized supported model is reported without truncating the rest of th
       count: 1,
       truncated: false,
     });
-    expect(scanner.listModels().map((model) => model.name)).toEqual(['safe.glb']);
+    expect(scanner.getCatalogPage({ limit: 10 }).items.map((model) => model.name)).toEqual(['safe.glb']);
     expect(scanner.getStatus()).toMatchObject({
       skippedEntries: 1,
       oversizedModels: 1,

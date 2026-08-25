@@ -5,8 +5,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   ANIMATED_TRIANGLE_GLB_SHA256,
   PACKAGED_FIXTURE_MATRIX,
+  PACKAGED_REJECTION_MATRIX,
   assertPackagedFixtureFiles,
   assertPackagedFixtureMatrixReport,
+  assertPackagedRejectionFiles,
+  assertPackagedRejectionMatrixReport,
   createAnimatedTriangleGlb,
   preparePackagedFixtureMatrix,
 } from '../scripts/packaged-fixture-matrix.mjs';
@@ -27,6 +30,12 @@ function createPassingReport() {
         contextLost: false,
         dialogOpened: false,
       })),
+      rejectedFormatMatrix: PACKAGED_REJECTION_MATRIX.map((fixture) => ({
+        name: path.basename(fixture.relativePath),
+        extension: path.extname(fixture.relativePath).slice(1).toLowerCase(),
+        size: 64,
+        rejectedBeforePublication: true,
+      })),
     },
   };
 }
@@ -34,6 +43,7 @@ function createPassingReport() {
 test('packaged fixture manifest resolves persisted and generated real-format scenarios', async () => {
   const persistedFixtures = assertPackagedFixtureFiles();
   expect(persistedFixtures).toHaveLength(9);
+  expect(assertPackagedRejectionFiles()).toHaveLength(6);
   const prepared = await preparePackagedFixtureMatrix();
   try {
     const fixtures = prepared.fixtures;
@@ -43,6 +53,7 @@ test('packaged fixture manifest resolves persisted and generated real-format sce
     expect(fixtures.map((fixture) => fixture.extension)).toEqual([
       'glb', 'gltf', 'gltf', 'gltf', 'gltf', 'obj', 'dae', 'fbx', 'ply', 'stl',
     ]);
+    expect(prepared.rejectedFixtures).toHaveLength(6);
   } finally {
     await prepared.cleanup();
   }
@@ -64,7 +75,9 @@ test('generated GLB is a real animated binary glTF asset', async () => {
 test('packaged fixture report accepts complete real-load evidence without local paths', () => {
   const report = createPassingReport();
   expect(() => assertPackagedFixtureMatrixReport(report, 'Test artifact')).not.toThrow();
+  expect(() => assertPackagedRejectionMatrixReport(report, 'Test artifact')).not.toThrow();
   expect(JSON.stringify(report.checks.formatMatrix)).not.toContain('fixturePath');
+  expect(JSON.stringify(report.checks.rejectedFormatMatrix)).not.toContain('fixturePath');
 });
 
 test('packaged fixture report rejects missing scenarios and ambiguous load evidence', () => {
@@ -84,4 +97,16 @@ test('packaged fixture report rejects local filesystem path fields', () => {
   report.checks.formatMatrix[0].fixturePath = 'C:\\private\\fixture.gltf';
   expect(() => assertPackagedFixtureMatrixReport(report, 'Test artifact'))
     .toThrow('exposed a local fixture path');
+});
+
+test('packaged rejection report requires every hostile candidate to fail before publication', () => {
+  const missing = createPassingReport();
+  missing.checks.rejectedFormatMatrix.pop();
+  expect(() => assertPackagedRejectionMatrixReport(missing, 'Test artifact'))
+    .toThrow('every packaged rejection scenario');
+
+  const accepted = createPassingReport();
+  accepted.checks.rejectedFormatMatrix[1].rejectedBeforePublication = false;
+  expect(() => assertPackagedRejectionMatrixReport(accepted, 'Test artifact'))
+    .toThrow('obj-geometry-free');
 });
