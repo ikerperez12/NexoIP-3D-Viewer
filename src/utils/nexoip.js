@@ -1,12 +1,6 @@
-export const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
-  'glb',
-  'gltf',
-  'obj',
-  'stl',
-  'fbx',
-  'ply',
-  'dae'
-]);
+import { SUPPORTED_MODEL_FORMATS } from '../../shared/model-formats.js';
+
+export const SUPPORTED_MODEL_EXTENSIONS = SUPPORTED_MODEL_FORMATS;
 
 // Keep the renderer hint aligned with the authoritative main-process limit.
 export const MAX_DROPPED_FILE_BYTES = 256 * 1024 * 1024;

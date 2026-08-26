@@ -51,6 +51,28 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.{js,jsx}'],
-    passWithNoTests: false
+    passWithNoTests: false,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary', 'html'],
+      reportsDirectory: 'coverage',
+      include: [
+        'electron/**/*.{js,cjs}',
+        'scripts/**/*.mjs',
+        'shared/**/*.js',
+        'src/**/*.{js,jsx}'
+      ],
+      exclude: [
+        'electron/main.js',
+        'electron/preload.cjs',
+        'src/main.jsx'
+      ],
+      thresholds: {
+        statements: 48,
+        branches: 50,
+        functions: 49,
+        lines: 50
+      }
+    }
   }
 });

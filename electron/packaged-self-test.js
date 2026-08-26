@@ -6,8 +6,17 @@ import { isPathInside, isSupportedModelPath } from './security.js';
 
 const MAX_CONFIG_BYTES = 16 * 1024;
 const MAX_ASSET_PROBE_BYTES = 64 * 1024;
+const MAX_FIXTURE_PATHS = 12;
+const MAX_REJECTION_FIXTURE_PATHS = 12;
+const MAX_LOADER_REJECTION_FIXTURE_PATHS = 4;
+const MODEL_LOAD_TIMEOUT_MS = 20_000;
 const TEMP_CONFIG_PATTERN = /^nexoip-packaged-self-test-[a-f0-9]+\.json$/;
 const TEMP_RESULT_PATTERN = /^result-[a-f0-9]+\.json$/;
+const TEMP_SCREENSHOT_PATTERN = /^screenshot-[a-f0-9]+\.png$/;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+const MAX_SCREENSHOT_DIMENSION = 8_192;
+const MAX_SCREENSHOT_PIXELS = 16_777_216;
 const ACCESSIBILITY_TEST_WINDOW = Object.freeze({ width: 900, height: 600 });
 const ACCESSIBILITY_TEST_ZOOM_FACTOR = 2;
 const ACCESSIBILITY_EVIDENCE_SCOPE = Object.freeze({
@@ -56,22 +65,81 @@ async function canonicalTemporaryConfigPath(configPath) {
 }
 
 async function validateConfig(config, configPath, expectedDigest) {
+  const hasScreenshotPath = Object.hasOwn(config || {}, 'screenshotPath');
+  const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
+  const loaderRejectionFixturePaths = config?.loaderRejectionFixturePaths ?? [];
   if (!isPlainObject(config)
-    || config.version !== 1
+    || config.version !== 2
     || typeof config.token !== 'string'
     || !/^[a-f0-9]{64}$/i.test(config.token)
-    || typeof config.fixturePath !== 'string'
+    || !Array.isArray(config.fixturePaths)
+    || config.fixturePaths.length === 0
+    || config.fixturePaths.length > MAX_FIXTURE_PATHS
+    || config.fixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
+    || !Array.isArray(rejectedFixturePaths)
+    || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS
+    || rejectedFixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
+    || !Array.isArray(loaderRejectionFixturePaths)
+    || loaderRejectionFixturePaths.length > MAX_LOADER_REJECTION_FIXTURE_PATHS
+    || loaderRejectionFixturePaths.some((fixturePath) => typeof fixturePath !== 'string'
+      || !path.isAbsolute(fixturePath)
+      || !isSupportedModelPath(fixturePath))
     || typeof config.resultPath !== 'string'
-    || !path.isAbsolute(config.fixturePath)
     || !path.isAbsolute(config.resultPath)
-    || !isSupportedModelPath(config.fixturePath)
-    || !TEMP_RESULT_PATTERN.test(path.basename(config.resultPath))) {
+    || !TEMP_RESULT_PATTERN.test(path.basename(config.resultPath))
+    || (hasScreenshotPath && (typeof config.screenshotPath !== 'string'
+      || !path.isAbsolute(config.screenshotPath)
+      || !TEMP_SCREENSHOT_PATTERN.test(path.basename(config.screenshotPath))
+      || hasPathTraversalSegment(config.screenshotPath)))
+    || typeof expectedDigest !== 'string'
+    || !/^[a-f0-9]{64}$/i.test(expectedDigest)) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
-  const configDirectory = await fs.promises.realpath(path.dirname(configPath));
-  const resultDirectory = await fs.promises.realpath(path.dirname(config.resultPath));
-  if (path.relative(configDirectory, resultDirectory) !== '') {
+  let configDirectory;
+  let resultDirectory;
+  let screenshotDirectory;
+  let fixturePaths;
+  let canonicalRejectedFixturePaths;
+  let canonicalLoaderRejectionFixturePaths;
+  try {
+    [
+      configDirectory,
+      resultDirectory,
+      fixturePaths,
+      canonicalRejectedFixturePaths,
+      canonicalLoaderRejectionFixturePaths,
+    ] = await Promise.all([
+      fs.promises.realpath(path.dirname(configPath)),
+      fs.promises.realpath(path.dirname(config.resultPath)),
+      Promise.all(config.fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+      Promise.all(rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+      Promise.all(loaderRejectionFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath))),
+    ]);
+    if (hasScreenshotPath) {
+      screenshotDirectory = await fs.promises.realpath(path.dirname(config.screenshotPath));
+    }
+  } catch {
+    throw new Error('The packaged self-test configuration is invalid.');
+  }
+  if (path.relative(configDirectory, resultDirectory) !== ''
+    || (hasScreenshotPath && path.relative(configDirectory, screenshotDirectory) !== '')) {
+    throw new Error('The packaged self-test configuration is invalid.');
+  }
+
+  const allFixturePaths = [
+    ...fixturePaths,
+    ...canonicalRejectedFixturePaths,
+    ...canonicalLoaderRejectionFixturePaths,
+  ];
+  const uniqueFixturePaths = new Set(allFixturePaths.map((fixturePath) => (
+    process.platform === 'win32' ? fixturePath.toLowerCase() : fixturePath
+  )));
+  if (uniqueFixturePaths.size !== allFixturePaths.length) {
     throw new Error('The packaged self-test configuration is invalid.');
   }
 
@@ -82,8 +150,103 @@ async function validateConfig(config, configPath, expectedDigest) {
   }
 
   return {
-    fixturePath: path.resolve(config.fixturePath),
+    fixturePaths,
+    rejectedFixturePaths: canonicalRejectedFixturePaths,
+    loaderRejectionFixturePaths: canonicalLoaderRejectionFixturePaths,
     resultPath: path.join(resultDirectory, path.basename(config.resultPath)),
+    screenshotPath: hasScreenshotPath
+      ? path.join(screenshotDirectory, path.basename(config.screenshotPath))
+      : undefined,
+  };
+}
+
+function hasPathTraversalSegment(filePath) {
+  const root = path.parse(filePath).root;
+  return filePath.slice(root.length).split(/[\\/]+/).some((segment) => segment === '.' || segment === '..');
+}
+
+function assertCapturedPng(nativeImage) {
+  if (!nativeImage
+    || typeof nativeImage.isEmpty !== 'function'
+    || typeof nativeImage.getSize !== 'function'
+    || typeof nativeImage.toPNG !== 'function') {
+    throw new Error('The packaged self-test screenshot capture is unavailable.');
+  }
+
+  let empty;
+  let size;
+  let png;
+  try {
+    empty = nativeImage.isEmpty();
+    size = nativeImage.getSize();
+    png = nativeImage.toPNG();
+  } catch {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+  if (empty !== false) {
+    throw new Error('The packaged self-test screenshot capture is empty.');
+  }
+  if (!size
+    || !Number.isSafeInteger(size.width)
+    || !Number.isSafeInteger(size.height)
+    || size.width <= 0
+    || size.height <= 0
+    || size.width > MAX_SCREENSHOT_DIMENSION
+    || size.height > MAX_SCREENSHOT_DIMENSION
+    || size.width * size.height > MAX_SCREENSHOT_PIXELS
+    || (!Buffer.isBuffer(png) && !ArrayBuffer.isView(png))) {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+
+  const bytes = Buffer.from(png);
+  if (bytes.length < PNG_SIGNATURE.length
+    || bytes.length > MAX_SCREENSHOT_BYTES
+    || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error('The packaged self-test screenshot capture is invalid.');
+  }
+  return { bytes, width: size.width, height: size.height };
+}
+
+async function writeCapturedPng(screenshotPath, bytes) {
+  const directory = path.dirname(screenshotPath);
+  const filename = path.basename(screenshotPath);
+  if (!TEMP_SCREENSHOT_PATTERN.test(filename)
+    || path.join(directory, filename) !== screenshotPath) {
+    throw new Error('The packaged self-test screenshot path is invalid.');
+  }
+
+  const temporaryPath = path.join(directory, `.${filename}.${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    await fs.promises.writeFile(temporaryPath, bytes, { mode: 0o600, flag: 'wx' });
+    await fs.promises.rename(temporaryPath, screenshotPath);
+  } catch (error) {
+    await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function capturePackagedSelfTestScreenshot(renderer, screenshotPath) {
+  if (typeof renderer?.capturePage !== 'function') {
+    throw new Error('The packaged self-test screenshot capture is unavailable.');
+  }
+
+  let nativeImage;
+  try {
+    nativeImage = await renderer.capturePage();
+  } catch {
+    throw new Error('The packaged self-test screenshot capture failed.');
+  }
+  const capture = assertCapturedPng(nativeImage);
+  try {
+    await writeCapturedPng(screenshotPath, capture.bytes);
+  } catch {
+    throw new Error('The packaged self-test screenshot capture could not be written.');
+  }
+  return {
+    filename: path.basename(screenshotPath),
+    width: capture.width,
+    height: capture.height,
+    bytes: capture.bytes.length,
   };
 }
 
@@ -100,6 +263,558 @@ async function readAssetPrefix(stream) {
     }
   }
   return Buffer.concat(chunks, total);
+}
+
+function sanitizeRendererDiagnostic(value) {
+  return String(value || '')
+    .replace(/(?:https?|nexoip|blob|file):[^\s"'<>]+/gi, '[url]')
+    .replace(/[a-z]:[\\/][^\s"'<>]+/gi, '[local-path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+async function probeRendererModelLoad(renderer, model, expectedSize, { prepareScreenshotFrame = false } = {}) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot dispatch and observe a real model load.');
+  }
+
+  const consoleDiagnostics = [];
+  const handleConsoleMessage = (...args) => {
+    const message = typeof args[0]?.message === 'string' ? args[0].message : args[2];
+    const sanitized = sanitizeRendererDiagnostic(message);
+    if (sanitized && !consoleDiagnostics.includes(sanitized)) {
+      consoleDiagnostics.push(sanitized);
+      if (consoleDiagnostics.length > 4) consoleDiagnostics.shift();
+    }
+  };
+  renderer.on?.('console-message', handleConsoleMessage);
+
+  let result;
+  try {
+    renderer.send('nexoip:model-opened', model);
+    result = await renderer.executeJavaScript(`(async () => {
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const expectedSize = ${JSON.stringify(expectedSize)};
+    const timeoutMs = ${MODEL_LOAD_TIMEOUT_MS};
+    const prepareScreenshotFrame = ${JSON.stringify(prepareScreenshotFrame)};
+    const bridgeAvailable = Boolean(window.nexoip)
+      && typeof window.nexoip.getCatalogPage === 'function'
+      && typeof window.nexoip.getModelUrl === 'function';
+    if (!bridgeAvailable) throw new Error('The packaged preload bridge is unavailable during a model load.');
+
+    const catalogPage = await window.nexoip.getCatalogPage({
+      filters: { query: ${JSON.stringify(model.name)}, sortBy: 'name', order: 'asc' },
+      limit: 100,
+    });
+    const model = Array.isArray(catalogPage?.items)
+      ? catalogPage.items.find((item) => item.id === expectedModelId)
+      : null;
+    if (!model) throw new Error('The registered model is missing from the packaged library.');
+
+    const modelResponse = await fetch(window.nexoip.getModelUrl(expectedModelId), { cache: 'no-store' });
+    const modelBytes = modelResponse.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
+    if (modelBytes !== expectedSize) {
+      throw new Error('The private model protocol did not return the complete approved model.');
+    }
+
+    const deadline = performance.now() + timeoutMs;
+    let dialogOpened = false;
+    while (performance.now() < deadline) {
+      const openDialog = document.querySelector('dialog[open]');
+      if (openDialog) {
+        dialogOpened = true;
+        break;
+      }
+
+      const main = document.querySelector('main');
+      if (main?.getAttribute('data-loaded-model-id') === expectedModelId) {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (document.querySelector('dialog[open]')) {
+          throw new Error('The packaged renderer opened an error dialog after publishing its loaded-model marker.');
+        }
+        if (document.querySelector('main')?.getAttribute('data-loaded-model-id') !== expectedModelId) {
+          throw new Error('The packaged renderer changed its loaded-model marker before the scene settled.');
+        }
+        const transientLoadStatusVisible = Array.from(document.querySelectorAll('[role="status"]'))
+          .some((element) => element.textContent?.includes('Cargando'));
+        if (transientLoadStatusVisible) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          continue;
+        }
+        let screenshotFrame;
+        if (prepareScreenshotFrame) {
+          const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const getAction = (label) => Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === label);
+          if (document.querySelector('aside[aria-label="Biblioteca de modelos locales"]')) {
+            const closeLibrary = getAction('Cerrar biblioteca de modelos') || getAction('Cerrar biblioteca');
+            if (!(closeLibrary instanceof HTMLButtonElement)) {
+              throw new Error('The packaged screenshot frame could not close the normal library panel.');
+            }
+            closeLibrary.click();
+          }
+          if (!document.querySelector('aside[aria-label="Propiedades del modelo"]')) {
+            const openInspector = getAction('Abrir propiedades del modelo');
+            if (!(openInspector instanceof HTMLButtonElement)) {
+              throw new Error('The packaged screenshot frame could not open the normal properties panel.');
+            }
+            openInspector.click();
+          }
+          await nextFrame();
+          if (document.querySelector('aside[aria-label="Biblioteca de modelos locales"]')
+            || !document.querySelector('aside[aria-label="Propiedades del modelo"]')) {
+            throw new Error('The packaged screenshot frame did not settle in its clean visual state.');
+          }
+          screenshotFrame = { libraryClosed: true, inspectorVisible: true };
+        }
+        const canvas = document.querySelector('[data-viewport-controls] canvas');
+        let context = null;
+        let webglContext = null;
+        if (canvas instanceof HTMLCanvasElement) {
+          try {
+            context = canvas.getContext('webgl2');
+            webglContext = context ? 'webgl2' : null;
+            if (!context) {
+              context = canvas.getContext('webgl');
+              webglContext = context ? 'webgl' : null;
+            }
+          } catch {
+            context = null;
+          }
+        }
+        const contextLost = typeof context?.isContextLost === 'function' ? context.isContextLost() : true;
+        return {
+          bridgeAvailable,
+          modelBytes,
+          eventDispatches: 1,
+          exactModelMarker: true,
+          canvas: {
+            present: canvas instanceof HTMLCanvasElement,
+            width: canvas instanceof HTMLCanvasElement ? canvas.width : 0,
+            height: canvas instanceof HTMLCanvasElement ? canvas.height : 0,
+          },
+          webglContext,
+          contextLost,
+          dialogOpened,
+          screenshotFrame,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (dialogOpened) throw new Error('The packaged renderer opened an error dialog while loading a format fixture.');
+    const probeWorkerRuntime = async () => {
+      let worker;
+      let workerUrl;
+      try {
+        const source = [
+          'self.onmessage = async () => {',
+          '  try {',
+          '    await WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0]));',
+          '    let dynamicCode = "blocked";',
+          '    try { dynamicCode = new Function("return 1")() === 1 ? "ok" : "unexpected"; } catch (_) {}',
+          '    self.postMessage({ status: "ok", dynamicCode });',
+          '  } catch (error) {',
+          '    self.postMessage({ status: "error", name: error && error.name ? error.name : "Error" });',
+          '  }',
+          '};'
+        ].join('\\n');
+        workerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        worker = new Worker(workerUrl);
+        return await Promise.race([
+          new Promise((resolve) => {
+            worker.onmessage = (event) => resolve(event.data?.status === 'ok'
+              ? 'wasm:ok,dynamic:' + (event.data?.dynamicCode || 'unknown')
+              : 'error:' + (event.data?.name || 'Error'));
+            worker.onerror = (event) => {
+              event.preventDefault();
+              resolve('error:WorkerError');
+            };
+            worker.postMessage(null);
+          }),
+          new Promise((resolve) => setTimeout(() => resolve('timeout'), 1_000))
+        ]);
+      } catch (error) {
+        return 'error:' + (error && error.name ? error.name : 'Error');
+      } finally {
+        worker?.terminate();
+        if (workerUrl) URL.revokeObjectURL(workerUrl);
+      }
+    };
+    const workerRuntime = await probeWorkerRuntime();
+    const observedMarker = document.querySelector('main')?.getAttribute('data-loaded-model-id');
+    const loadingIndicator = Array.from(document.querySelectorAll('[role="status"]'))
+      .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+    const selectedModel = Boolean(document.querySelector('button[aria-current="true"]'));
+    const canvasPresent = document.querySelector('[data-viewport-controls] canvas') instanceof HTMLCanvasElement;
+    throw new Error(
+      'The packaged renderer timed out before publishing the exact loaded-model marker '
+      + '(selected=' + selectedModel
+      + ', loading=' + loadingIndicator
+      + ', canvas=' + canvasPresent
+      + ', workerWasm=' + workerRuntime
+      + ', marker=' + (observedMarker ? 'different' : 'missing') + ').'
+    );
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    const consoleSummary = consoleDiagnostics.length > 0
+      ? ` Renderer console: ${consoleDiagnostics.join(' | ')}`
+      : '';
+    throw new Error(`${message || 'The packaged renderer probe failed.'}${consoleSummary}`, { cause: error });
+  } finally {
+    renderer.off?.('console-message', handleConsoleMessage);
+  }
+
+  const valid = result?.bridgeAvailable === true
+    && result.modelBytes === expectedSize
+    && result.eventDispatches === 1
+    && result.exactModelMarker === true
+    && result.canvas?.present === true
+    && Number.isSafeInteger(result.canvas.width) && result.canvas.width > 0
+    && Number.isSafeInteger(result.canvas.height) && result.canvas.height > 0
+    && (result.webglContext === 'webgl2' || result.webglContext === 'webgl')
+    && result.contextLost === false
+    && result.dialogOpened === false;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete evidence for a real model load.');
+  }
+  return result;
+}
+
+async function probeRendererStaleLoadCancellation(renderer, delayedModel, winningModel) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot exercise stale model-load cancellation.');
+  }
+
+  let delayInstalled = false;
+  try {
+    delayInstalled = await renderer.executeJavaScript(`(() => {
+      if (!window.nexoip || typeof window.nexoip.getModelUrl !== 'function') return false;
+      const delayedUrl = window.nexoip.getModelUrl(${JSON.stringify(delayedModel.id)});
+      const originalFetch = window.fetch;
+      if (typeof delayedUrl !== 'string' || typeof originalFetch !== 'function') return false;
+      const state = {
+        intercepted: false,
+        released: false,
+        release: null,
+        cleanup() {
+          window.fetch = originalFetch;
+          delete window.__nexoipPackagedSwitchProbe;
+        },
+      };
+      window.__nexoipPackagedSwitchProbe = state;
+      window.fetch = function packagedStaleLoadFetch(input, init) {
+        const requestUrl = typeof input === 'string' ? input : input?.url;
+        if (!state.intercepted && requestUrl === delayedUrl) {
+          state.intercepted = true;
+          return new Promise((resolve, reject) => {
+            state.release = () => {
+              if (state.released) return;
+              state.released = true;
+              Reflect.apply(originalFetch, window, [input, init]).then(resolve, reject);
+            };
+          });
+        }
+        return Reflect.apply(originalFetch, window, [input, init]);
+      };
+      return true;
+    })()`);
+    if (delayInstalled !== true) {
+      throw new Error('The packaged stale-load delay could not be installed.');
+    }
+
+    renderer.send('nexoip:model-opened', delayedModel);
+    const intercepted = await renderer.executeJavaScript(`(async () => {
+      const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+      while (performance.now() < deadline) {
+        if (window.__nexoipPackagedSwitchProbe?.intercepted === true) return true;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return false;
+    })()`);
+    if (intercepted !== true) {
+      throw new Error('The packaged stale model load did not reach its controlled fetch delay.');
+    }
+
+    renderer.send('nexoip:model-opened', winningModel);
+    const result = await renderer.executeJavaScript(`(async () => {
+      const expectedModelId = ${JSON.stringify(winningModel.id)};
+      const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+      let winningModelLoaded = false;
+      while (performance.now() < deadline) {
+        const container = document.querySelector('[data-viewport-controls]');
+        winningModelLoaded = container?.dataset?.loadedModelId === expectedModelId
+          && container?.dataset?.loadedRendererGeneration === container?.dataset?.rendererGeneration
+          && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId
+          && !Array.from(document.querySelectorAll('[role="status"]'))
+            .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+        if (winningModelLoaded) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const state = window.__nexoipPackagedSwitchProbe;
+      const delayedRequestObserved = state?.intercepted === true;
+      const delayedRequestReleased = typeof state?.release === 'function';
+      state?.release?.();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const container = document.querySelector('[data-viewport-controls]');
+      const canvas = container?.querySelector('canvas');
+      let context = null;
+      if (canvas instanceof HTMLCanvasElement) {
+        try {
+          context = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        } catch {
+          context = null;
+        }
+      }
+      const winningModelRemained = container?.dataset?.loadedModelId === expectedModelId
+        && container?.dataset?.loadedRendererGeneration === container?.dataset?.rendererGeneration
+        && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId;
+      const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+        .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+      const dialogClosed = !document.querySelector('dialog[open]');
+      const contextHealthy = Boolean(context)
+        && (typeof context.isContextLost !== 'function' || context.isContextLost() === false);
+      state?.cleanup?.();
+      return {
+        delayInstalled: true,
+        delayedRequestObserved,
+        winningModelLoaded,
+        delayedRequestReleased,
+        winningModelRemained,
+        loadingSettled,
+        dialogClosed,
+        contextHealthy,
+      };
+    })()`);
+
+    const valid = result?.delayInstalled === true
+      && result.delayedRequestObserved === true
+      && result.winningModelLoaded === true
+      && result.delayedRequestReleased === true
+      && result.winningModelRemained === true
+      && result.loadingSettled === true
+      && result.dialogClosed === true
+      && result.contextHealthy === true;
+    if (!valid) {
+      throw new Error('The packaged renderer did not provide complete stale-load cancellation evidence.');
+    }
+    return result;
+  } catch (error) {
+    if (delayInstalled) {
+      await renderer.executeJavaScript(`(() => {
+        window.__nexoipPackagedSwitchProbe?.release?.();
+        window.__nexoipPackagedSwitchProbe?.cleanup?.();
+      })()`).catch(() => undefined);
+    }
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged stale-load cancellation probe failed.', { cause: error });
+  }
+}
+
+async function probeRendererContextRecovery(renderer, model) {
+  if (typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot exercise WebGL recovery.');
+  }
+
+  let result;
+  try {
+    result = await renderer.executeJavaScript(`(async () => {
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const timeoutMs = ${MODEL_LOAD_TIMEOUT_MS};
+    const container = document.querySelector('[data-viewport-controls]');
+    const previousCanvas = container?.querySelector('canvas');
+    const previousGeneration = container?.dataset?.rendererGeneration;
+    if (!(previousCanvas instanceof HTMLCanvasElement) || previousGeneration === undefined) {
+      throw new Error('The packaged WebGL recovery probe has no active renderer generation.');
+    }
+
+    const lossEvent = new Event('webglcontextlost', { cancelable: true });
+    const lossWasNotCancelled = previousCanvas.dispatchEvent(lossEvent);
+    const lossDeadline = performance.now() + timeoutMs;
+    let lossDialogVisible = false;
+    let recoveryActionVisible = false;
+    while (performance.now() < lossDeadline) {
+      const dialog = document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      const title = document.getElementById('model-error-title')?.textContent?.trim();
+      const recover = Array.from(dialog?.querySelectorAll('button') || [])
+        .find((button) => button.textContent?.trim() === 'Recuperar vista');
+      lossDialogVisible = dialog instanceof HTMLDialogElement
+        && title === 'No se pudo iniciar la vista 3D';
+      recoveryActionVisible = recover instanceof HTMLButtonElement;
+      if (lossDialogVisible && recoveryActionVisible) {
+        recover.click();
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!lossDialogVisible || !recoveryActionVisible) {
+      throw new Error('The packaged renderer did not expose its WebGL recovery action.');
+    }
+
+    const recoveryDeadline = performance.now() + timeoutMs;
+    while (performance.now() < recoveryDeadline) {
+      const nextContainer = document.querySelector('[data-viewport-controls]');
+      const nextCanvas = nextContainer?.querySelector('canvas');
+      const nextGeneration = nextContainer?.dataset?.rendererGeneration;
+      const generationAdvanced = nextGeneration !== undefined && nextGeneration !== previousGeneration;
+      const canvasReplaced = nextCanvas instanceof HTMLCanvasElement && nextCanvas !== previousCanvas;
+      const modelReloaded = nextContainer?.dataset?.loadedModelId === expectedModelId
+        && nextContainer?.dataset?.loadedRendererGeneration === nextGeneration
+        && document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId;
+      const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+        .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+      const dialogClosed = !document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      let contextHealthy = false;
+      if (nextCanvas instanceof HTMLCanvasElement) {
+        let context = null;
+        try {
+          context = nextCanvas.getContext('webgl2') || nextCanvas.getContext('webgl');
+        } catch {
+          context = null;
+        }
+        contextHealthy = Boolean(context)
+          && (typeof context.isContextLost !== 'function' || context.isContextLost() === false);
+      }
+      if (generationAdvanced
+        && canvasReplaced
+        && modelReloaded
+        && loadingSettled
+        && dialogClosed
+        && contextHealthy) {
+        return {
+          lossEventPrevented: lossWasNotCancelled === false,
+          lossDialogVisible,
+          recoveryActionVisible,
+          generationAdvanced,
+          canvasReplaced,
+          modelReloaded,
+          loadingSettled,
+          dialogClosed,
+          contextHealthy,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('The packaged renderer did not recover a healthy WebGL generation in time.');
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged WebGL recovery probe failed.', { cause: error });
+  }
+
+  const valid = result?.lossEventPrevented === true
+    && result.lossDialogVisible === true
+    && result.recoveryActionVisible === true
+    && result.generationAdvanced === true
+    && result.canvasReplaced === true
+    && result.modelReloaded === true
+    && result.loadingSettled === true
+    && result.dialogClosed === true
+    && result.contextHealthy === true;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete WebGL recovery evidence.');
+  }
+  return result;
+}
+
+async function probeRendererModelRejection(renderer, model, expectedSize) {
+  if (typeof renderer?.send !== 'function' || typeof renderer?.executeJavaScript !== 'function') {
+    throw new Error('The packaged self-test cannot dispatch and observe a rejected model load.');
+  }
+
+  renderer.send('nexoip:model-opened', model);
+  let result;
+  try {
+    result = await renderer.executeJavaScript(`(async () => {
+    const bridgeAvailable = Boolean(window.nexoip)
+      && typeof window.nexoip.getCatalogPage === 'function'
+      && typeof window.nexoip.getModelUrl === 'function';
+    if (!bridgeAvailable) throw new Error('The packaged preload bridge was not available for the rejection probe.');
+    const expectedModelId = ${JSON.stringify(model.id)};
+    const expectedSize = ${JSON.stringify(expectedSize)};
+    const deadline = performance.now() + ${MODEL_LOAD_TIMEOUT_MS};
+    const catalogPage = await window.nexoip.getCatalogPage({
+      filters: { query: ${JSON.stringify(model.name)}, sortBy: 'name', order: 'asc' },
+      limit: 100,
+    });
+    const registered = Array.isArray(catalogPage?.items)
+      && catalogPage.items.some((item) => item.id === expectedModelId);
+    if (!registered) throw new Error('The loader-rejection fixture is missing from the packaged library.');
+
+    const modelResponse = await fetch(window.nexoip.getModelUrl(expectedModelId), { cache: 'no-store' });
+    const modelBytes = modelResponse.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
+    if (modelBytes !== expectedSize) {
+      throw new Error('The private model protocol did not return the complete loader-rejection fixture.');
+    }
+
+    while (performance.now() < deadline) {
+      const dialog = document.querySelector('dialog[open][aria-labelledby="model-error-title"]');
+      if (dialog instanceof HTMLDialogElement) {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const title = document.getElementById('model-error-title')?.textContent?.trim() || '';
+        const description = document.getElementById('model-error-description')?.textContent?.trim() || '';
+        const failedMarkerAbsent = document.querySelector('main')?.getAttribute('data-loaded-model-id') !== expectedModelId;
+        const loadingSettled = !Array.from(document.querySelectorAll('[role="status"]'))
+          .some((element) => element.textContent?.includes('Cargando objeto 3D'));
+        const safeErrorMessage = title === 'No se pudo abrir el archivo 3D'
+          && description.startsWith('No se pudo cargar el material OBJ')
+          && !/(?:file|nexoip):/i.test(description)
+          && !/[A-Za-z]:/.test(description);
+        const canvasPresent = document.querySelector('[data-viewport-controls] canvas') instanceof HTMLCanvasElement;
+        const chooseAnother = Array.from(dialog.querySelectorAll('button'))
+          .find((button) => button.textContent?.trim() === 'Elegir otro modelo');
+        if (!(chooseAnother instanceof HTMLButtonElement)) {
+          throw new Error('The packaged rejection dialog has no recovery action.');
+        }
+        chooseAnother.click();
+
+        const recoveryDeadline = performance.now() + 2_000;
+        let recoveredToLibrary = false;
+        while (performance.now() < recoveryDeadline) {
+          recoveredToLibrary = !dialog.open
+            && !document.querySelector('main')?.getAttribute('data-loaded-model-id')
+            && !document.querySelector('button[aria-current="true"]')
+            && Boolean(document.querySelector('aside[aria-label="Biblioteca de modelos locales"]'));
+          if (recoveredToLibrary) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return {
+          registered,
+          protocolBytesComplete: modelBytes === expectedSize,
+          errorDialogVisible: true,
+          safeErrorMessage,
+          failedMarkerAbsent,
+          loadingSettled,
+          canvasPresent,
+          recoveredToLibrary,
+        };
+      }
+      if (document.querySelector('main')?.getAttribute('data-loaded-model-id') === expectedModelId) {
+        throw new Error('The packaged renderer published a loaded marker for a dependency-failing fixture.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('The packaged renderer did not expose a recoverable dependency-load error.');
+    })()`);
+  } catch (error) {
+    const message = sanitizeRendererDiagnostic(error instanceof Error ? error.message : error);
+    throw new Error(message || 'The packaged renderer rejection probe failed.', { cause: error });
+  }
+
+  const valid = result?.registered === true
+    && result.protocolBytesComplete === true
+    && result.errorDialogVisible === true
+    && result.safeErrorMessage === true
+    && result.failedMarkerAbsent === true
+    && result.loadingSettled === true
+    && result.canvasPresent === true
+    && result.recoveredToLibrary === true;
+  if (!valid) {
+    throw new Error('The packaged renderer did not provide complete evidence for a recoverable rejected load.');
+  }
+  return result;
 }
 
 function isFiniteNumber(value) {
@@ -232,25 +947,25 @@ export async function loadPackagedSelfTestConfig(request) {
 
 export async function runPackagedSelfTest({ scanner, config, renderer, window: applicationWindow }) {
   const startedAt = new Date().toISOString();
+  const rejectedFixturePaths = config?.rejectedFixturePaths ?? [];
+  const loaderRejectionFixturePaths = config?.loaderRejectionFixturePaths ?? [];
   const report = {
-    version: 1,
+    version: 2,
     status: 'failed',
     startedAt,
     checks: {},
   };
 
   try {
-    const fixtureStats = await fs.promises.stat(config.fixturePath);
-    if (!fixtureStats.isFile() || fixtureStats.size === 0) {
-      throw new Error('The packaged self-test fixture is missing or empty.');
+    if (!Array.isArray(config?.fixturePaths)
+      || config.fixturePaths.length === 0
+      || config.fixturePaths.length > MAX_FIXTURE_PATHS
+      || !Array.isArray(rejectedFixturePaths)
+      || rejectedFixturePaths.length > MAX_REJECTION_FIXTURE_PATHS
+      || !Array.isArray(loaderRejectionFixturePaths)
+      || loaderRejectionFixturePaths.length > MAX_LOADER_REJECTION_FIXTURE_PATHS) {
+      throw new Error('The packaged self-test fixture matrix is invalid.');
     }
-
-    const model = await scanner.registerDroppedPath(config.fixturePath);
-    const asset = await scanner.openModelAsset(model.id, 'asset');
-    if (!asset) throw new Error('The packaged self-test fixture could not be opened securely.');
-
-    const prefix = await readAssetPrefix(asset.stream);
-    if (prefix.length === 0) throw new Error('The packaged self-test fixture could not be read.');
 
     const rendererUrl = renderer.getURL();
     const rendererTitle = renderer.getTitle();
@@ -263,16 +978,11 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     let restoredAccessibilityViewport;
     try {
       rendererChecks = await renderer.executeJavaScript(`(async () => {
-      const bridgeMethods = ['listModels', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
+      const bridgeMethods = ['getCatalogPage', 'getTreeChildren', 'getCatalogNeighbor', 'getModelUrl', 'getScanStatus', 'scan', 'cancelScan'];
       const bridgeAvailable = Boolean(window.nexoip)
         && bridgeMethods.every((method) => typeof window.nexoip[method] === 'function');
       if (!bridgeAvailable) return { bridgeAvailable: false };
 
-      const models = await window.nexoip.listModels({ sortBy: 'name', order: 'asc' });
-      const model = models.find((item) => item.id === ${JSON.stringify(model.id)});
-      const modelUrl = model ? window.nexoip.getModelUrl(model.id) : null;
-      const modelResponse = modelUrl ? await fetch(modelUrl, { cache: 'no-store' }) : null;
-      const modelBytes = modelResponse?.ok ? (await modelResponse.arrayBuffer()).byteLength : 0;
       const runtimePaths = [
         '/draco/draco_decoder.wasm',
         '/draco/draco_wasm_wrapper.js',
@@ -484,7 +1194,6 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
 
         return {
           bridgeAvailable,
-          modelBytes,
           bundledRuntimes,
           accessibility: {
             scope: ${JSON.stringify(ACCESSIBILITY_EVIDENCE_SCOPE)},
@@ -532,8 +1241,8 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
     } finally {
       restoredAccessibilityViewport = await restoreAccessibilityTestViewport(applicationWindow, renderer, accessibilityViewport);
     }
-    if (!rendererChecks.bridgeAvailable || rendererChecks.modelBytes !== fixtureStats.size) {
-      throw new Error('The packaged preload bridge or private model protocol did not return the approved fixture.');
+    if (!rendererChecks.bridgeAvailable) {
+      throw new Error('The packaged preload bridge was not available.');
     }
     if (rendererChecks.bundledRuntimes.some((runtime) => runtime.status !== 200 || runtime.bytes === 0)) {
       throw new Error('A bundled Draco or Basis runtime was not available from the packaged application origin.');
@@ -544,23 +1253,182 @@ export async function runPackagedSelfTest({ scanner, config, renderer, window: a
       restoredWindow: restoredAccessibilityViewport.window,
       restoredZoomFactor: restoredAccessibilityViewport.zoomFactor,
     };
+    assertPackagedAccessibilityEvidence(accessibilityResponsive);
+
+    const formatMatrix = [];
+    const rejectedFormatMatrix = [];
+    const loaderRejectedFormatMatrix = [];
+    let totalModelBytes = 0;
+    const loadedModels = [];
     report.checks = {
       localRenderer: { title: rendererTitle, url: rendererUrl },
-      fixture: {
-        id: model.id,
-        name: model.name,
-        size: model.size,
-        bytesRead: prefix.length,
-      },
+      formatMatrix,
+      rejectedFormatMatrix,
+      loaderRejectedFormatMatrix,
       preloadContract: {
         available: true,
-        modelBytes: rendererChecks.modelBytes,
+        modelCount: 0,
+        rejectedBeforePublicationCount: 0,
+        loaderRejectedCount: 0,
+        totalModelBytes: 0,
         noDebuggingTransport: true,
       },
       bundledRuntimes: rendererChecks.bundledRuntimes,
       accessibilityResponsive,
     };
-    assertPackagedAccessibilityEvidence(accessibilityResponsive);
+    for (let fixtureIndex = 0; fixtureIndex < rejectedFixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = rejectedFixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let rejectedBeforePublication = false;
+      try {
+        await scanner.registerDroppedPath(fixturePath);
+      } catch (error) {
+        rejectedBeforePublication = error instanceof TypeError && error.message === 'Invalid dropped file.';
+        if (!rejectedBeforePublication) {
+          throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} did not reach the expected validation boundary.`, {
+            cause: error,
+          });
+        }
+      }
+      if (!rejectedBeforePublication) {
+        throw new Error(`Packaged rejection fixture ${fixtureIndex + 1} entered the model catalog.`);
+      }
+      rejectedFormatMatrix.push({
+        name: path.basename(fixturePath),
+        extension: path.extname(fixturePath).slice(1).toLowerCase(),
+        size: fixtureStats.size,
+        rejectedBeforePublication: true,
+      });
+      report.checks.preloadContract.rejectedBeforePublicationCount = rejectedFormatMatrix.length;
+    }
+    for (let fixtureIndex = 0; fixtureIndex < config.fixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = config.fixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let model;
+      try {
+        model = await scanner.registerDroppedPath(fixturePath);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be registered securely.`);
+      }
+      let asset;
+      try {
+        asset = await scanner.openModelAsset(model.id, 'asset');
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be opened securely.`);
+      }
+      if (!asset) throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be opened securely.`);
+
+      let prefix;
+      try {
+        prefix = await readAssetPrefix(asset.stream);
+      } catch {
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} could not be read securely.`);
+      }
+      if (prefix.length === 0) throw new Error(`Packaged format fixture ${fixtureIndex + 1} is empty.`);
+
+      const shouldCaptureScreenshot = Boolean(config.screenshotPath && fixtureIndex === config.fixturePaths.length - 1);
+      let modelLoad;
+      try {
+        modelLoad = await probeRendererModelLoad(renderer, model, fixtureStats.size, {
+          prepareScreenshotFrame: shouldCaptureScreenshot,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const safeDetail = /^(The packaged|The private|The registered)/.test(message)
+          ? message
+          : 'The renderer probe failed without safe diagnostics.';
+        throw new Error(`Packaged format fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`, { cause: error });
+      }
+      totalModelBytes += modelLoad.modelBytes;
+      loadedModels.push(model);
+      formatMatrix.push({
+        name: model.name,
+        extension: path.extname(model.name).slice(1).toLowerCase(),
+        size: model.size,
+        bytesRead: prefix.length,
+        modelBytes: modelLoad.modelBytes,
+        eventDispatches: modelLoad.eventDispatches,
+        exactModelMarker: modelLoad.exactModelMarker,
+        canvas: modelLoad.canvas,
+        webglContext: modelLoad.webglContext,
+        contextLost: modelLoad.contextLost,
+        dialogOpened: modelLoad.dialogOpened,
+      });
+      if (shouldCaptureScreenshot) {
+        report.checks.screenshot = await capturePackagedSelfTestScreenshot(renderer, config.screenshotPath);
+      }
+      report.checks.preloadContract.modelCount = formatMatrix.length;
+      report.checks.preloadContract.totalModelBytes = totalModelBytes;
+    }
+    if (loadedModels.length >= 2) {
+      report.checks.staleLoadCancellation = await probeRendererStaleLoadCancellation(
+        renderer,
+        loadedModels[0],
+        loadedModels.at(-1),
+      );
+    } else {
+      report.checks.staleLoadCancellation = { tested: false, reason: 'insufficient-fixtures' };
+    }
+    report.checks.webglRecovery = await probeRendererContextRecovery(renderer, loadedModels.at(-1));
+    for (let fixtureIndex = 0; fixtureIndex < loaderRejectionFixturePaths.length; fixtureIndex += 1) {
+      const fixturePath = loaderRejectionFixturePaths[fixtureIndex];
+      let fixtureStats;
+      try {
+        fixtureStats = await fs.promises.stat(fixturePath);
+      } catch {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} could not be inspected.`);
+      }
+      if (!fixtureStats.isFile() || fixtureStats.size === 0) {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} is missing or empty.`);
+      }
+
+      let model;
+      try {
+        model = await scanner.registerDroppedPath(fixturePath);
+      } catch {
+        throw new Error(`Packaged loader-rejection fixture ${fixtureIndex + 1} could not be registered securely.`);
+      }
+
+      let modelRejection;
+      try {
+        modelRejection = await probeRendererModelRejection(renderer, model, fixtureStats.size);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const safeDetail = /^(The packaged|The private|The registered)/.test(message)
+          ? message
+          : 'The renderer rejection probe failed without safe diagnostics.';
+        throw new Error(
+          `Packaged loader-rejection fixture ${fixtureIndex + 1} (${model.name}) failed: ${safeDetail}`,
+          { cause: error },
+        );
+      }
+
+      loaderRejectedFormatMatrix.push({
+        name: model.name,
+        extension: path.extname(model.name).slice(1).toLowerCase(),
+        size: model.size,
+        ...modelRejection,
+      });
+      report.checks.preloadContract.loaderRejectedCount = loaderRejectedFormatMatrix.length;
+    }
     report.status = 'passed';
   } catch (error) {
     report.error = error instanceof Error ? error.message : String(error);

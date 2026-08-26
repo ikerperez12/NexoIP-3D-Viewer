@@ -12,15 +12,19 @@ import {
   DEV_RENDERER_URL,
   PACKAGED_APP_ORIGIN,
   getAppAssetPath,
+  getPackagedContentSecurityPolicy,
   getModelAssetMimeType,
   getModelRoute,
   isAllowedNavigationUrl,
   isAllowedRendererUrl,
   isOpaqueId,
-  normalizeFilters,
   normalizeDevRendererUrl,
 } from './security.js';
-import { findUnsafePackagedArguments, getPackagedSelfTestRequest } from './startup-policy.js';
+import {
+  findUnsafePackagedArguments,
+  getPackagedSelfTestRequest,
+  getUnsafePackagedArgumentNames,
+} from './startup-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,17 +43,45 @@ protocol.registerSchemesAsPrivileged([
 const scanner = new FileScanner();
 const DIST_DIRECTORY = path.join(__dirname, '..', 'dist');
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
+const APP_SESSION_PARTITION = 'nexoip-ephemeral';
 
 let mainWindow = null;
+let applicationSession = null;
+let pendingCatalogChange = null;
+let catalogChangeTimer = null;
 const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
 let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
 const unsafeStartupArguments = app.isPackaged ? findUnsafePackagedArguments(startupArguments) : [];
+const unsafeStartupArgumentNames = app.isPackaged ? getUnsafePackagedArgumentNames(startupArguments) : [];
 const packagedSelfTestRequest = app.isPackaged ? getPackagedSelfTestRequest(startupArguments) : null;
 const startupIsAllowed = unsafeStartupArguments.length === 0 && (!packagedSelfTestRequest || packagedSelfTestRequest.valid);
 
+function flushCatalogChange() {
+  catalogChangeTimer = null;
+  const change = pendingCatalogChange;
+  pendingCatalogChange = null;
+  if (!change || !mainWindow || mainWindow.isDestroyed()) return;
+
+  const contents = mainWindow.webContents;
+  if (!isAllowedRendererUrl(contents.getURL(), app.isPackaged)) return;
+  // This signal intentionally contains only snapshot metadata. A renderer
+  // must request a bounded page or a lazy tree branch after receiving it.
+  contents.send('nexoip:catalog-changed', change);
+}
+
+function queueCatalogChange(change) {
+  pendingCatalogChange = change;
+  if (catalogChangeTimer) return;
+  // A dense progressive scan may publish thousands of safe models. Coalesce
+  // those publications without delaying the first usable catalog state.
+  catalogChangeTimer = setTimeout(flushCatalogChange, 50);
+}
+
+scanner.onCatalogChange(queueCatalogChange);
+
 if (!startupIsAllowed) {
-  const reason = unsafeStartupArguments.length > 0
-    ? `Unsafe packaged startup argument rejected: ${unsafeStartupArguments.join(', ')}`
+  const reason = unsafeStartupArgumentNames.length > 0
+    ? `Unsafe packaged startup switch rejected: ${unsafeStartupArgumentNames.join(', ')}`
     : packagedSelfTestRequest.reason;
   process.stderr.write(`NexoIP 3D Viewer refused to start. ${reason}\n`);
   app.exit(78);
@@ -141,8 +173,9 @@ function registerIpcHandler(channel, handler) {
 }
 
 function registerIpcHandlers() {
-  registerIpcHandler('nexoip:list-models', (filters) => scanner.listModels(normalizeFilters(filters)));
-  registerIpcHandler('nexoip:get-tree', () => scanner.getTree());
+  registerIpcHandler('nexoip:get-catalog-page', (request) => scanner.getCatalogPage(request));
+  registerIpcHandler('nexoip:get-tree-children', (request) => scanner.getTreeChildren(request));
+  registerIpcHandler('nexoip:get-catalog-neighbor', (request) => scanner.getCatalogNeighbor(request));
   registerIpcHandler('nexoip:get-scan-status', () => scanner.getStatus());
   registerIpcHandler('nexoip:cancel-scan', () => scanner.cancelScan());
   registerIpcHandler('nexoip:consume-startup-model', async () => {
@@ -190,9 +223,14 @@ function registerIpcHandlers() {
   });
 }
 
-function configureSession() {
-  const currentSession = session.defaultSession;
+function getApplicationSession() {
+  if (!applicationSession) {
+    applicationSession = session.fromPartition(APP_SESSION_PARTITION, { cache: false });
+  }
+  return applicationSession;
+}
 
+function configureSession(currentSession) {
   currentSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   currentSession.setPermissionCheckHandler(() => false);
 
@@ -206,9 +244,7 @@ function configureSession() {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:",
-          ],
+          'Content-Security-Policy': [getPackagedContentSecurityPolicy(new URL(details.url).pathname)],
           'Permissions-Policy': ['camera=(), geolocation=(), microphone=(), payment=(), usb=()'],
           'Referrer-Policy': ['no-referrer'],
           'X-Content-Type-Options': ['nosniff'],
@@ -233,6 +269,7 @@ function hardenWindow(webContents) {
 }
 
 async function createWindow({ show = true } = {}) {
+  const currentSession = getApplicationSession();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
@@ -243,6 +280,7 @@ async function createWindow({ show = true } = {}) {
     autoHideMenuBar: true,
     show,
     webPreferences: {
+      session: currentSession,
       preload: PRELOAD_PATH,
       nodeIntegration: false,
       contextIsolation: true,
@@ -275,22 +313,34 @@ async function runConfiguredPackagedSelfTest() {
   if (report.status !== 'passed') {
     throw new Error(report.error || 'The packaged self-test failed.');
   }
-  process.stdout.write('NexoIP packaged self-test passed without a debugging transport.\n');
+  await new Promise((resolve, reject) => {
+    process.stdout.write('NexoIP packaged self-test passed without a debugging transport.\n', (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 if (startupIsAllowed) {
   app.whenReady().then(async () => {
     try {
-      protocol.handle('nexoip', handleNexoipProtocol);
-      configureSession();
+      const currentSession = getApplicationSession();
+      currentSession.protocol.handle('nexoip', handleNexoipProtocol);
+      configureSession(currentSession);
       registerIpcHandlers();
       await createWindow({ show: !packagedSelfTestRequest });
       if (packagedSelfTestRequest) {
         await runConfiguredPackagedSelfTest();
-        app.quit();
+        // The self-test has written its durable report and flushed its completion marker.
+        // Exit directly so a decoder worker cannot keep this non-interactive process alive.
+        app.exit(0);
+        return;
       }
     } catch (error) {
-      process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${error instanceof Error ? error.message : String(error)}\n`);
+      const reason = app.isPackaged
+        ? 'Startup initialization failed.'
+        : (error instanceof Error ? error.message : String(error));
+      process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${reason}\n`);
       app.exit(1);
     }
   });

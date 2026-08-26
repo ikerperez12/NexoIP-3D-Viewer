@@ -58,6 +58,7 @@ export default function Toolbar3D({
   onNextModel,
   onRandomModel,
   currentIndex,
+  currentIndexKnown = true,
   totalCount,
   onCameraControl,
   sidebarTriggerRef,
@@ -66,7 +67,10 @@ export default function Toolbar3D({
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const cameraMenuTriggerRef = useRef(null);
   const cameraMenuId = `camera-controls-${useId().replace(/:/g, '')}`;
-  const currentModelPosition = totalCount > 0 ? `${currentIndex + 1} de ${totalCount}` : 'sin modelos en la biblioteca';
+  const hasExactModelPosition = currentIndexKnown && Number.isSafeInteger(currentIndex) && currentIndex >= 0;
+  const currentModelPosition = totalCount > 0
+    ? (hasExactModelPosition ? `${currentIndex + 1} de ${totalCount}` : `posición no cargada de ${totalCount}`)
+    : 'sin modelos en la biblioteca';
 
   const selectCameraPreset = (event) => {
     const preset = event.target.value;
@@ -107,7 +111,7 @@ export default function Toolbar3D({
           <button type="button" onClick={onPrevModel} disabled={totalCount <= 1} className="flex min-h-8 min-w-8 items-center justify-center rounded-lg p-1.5 text-gray-200 transition-all hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-40" title="Modelo anterior (flecha izquierda)" aria-label="Modelo anterior">
             <ChevronLeft size={18} aria-hidden="true" />
           </button>
-          <span className="min-w-9 px-1 text-center text-[11px] font-mono font-bold text-amber-200" aria-hidden="true">{totalCount > 0 ? `${currentIndex + 1}/${totalCount}` : '0/0'}</span>
+          <span className="min-w-9 px-1 text-center text-[11px] font-mono font-bold text-amber-200" aria-hidden="true">{totalCount > 0 ? (hasExactModelPosition ? `${currentIndex + 1}/${totalCount}` : `—/${totalCount}`) : '0/0'}</span>
           <button type="button" onClick={onNextModel} disabled={totalCount <= 1} className="flex min-h-8 min-w-8 items-center justify-center rounded-lg p-1.5 text-gray-200 transition-all hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-40" title="Modelo siguiente (flecha derecha)" aria-label="Modelo siguiente">
             <ChevronRight size={18} aria-hidden="true" />
           </button>

@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import { loadPackagedSelfTestConfig, runPackagedSelfTest } from '../electron/packaged-self-test.js';
+import { preparePackagedFixtureMatrix } from '../scripts/packaged-fixture-matrix.mjs';
 
 const temporaryDirectories = [];
 
@@ -20,12 +21,15 @@ async function writeCapabilityConfig(overrides = {}) {
   const configPath = path.join(directory, 'nexoip-packaged-self-test-a1.json');
   const resultPath = path.join(directory, 'result-a1.json');
   const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const resolvedOverrides = typeof overrides === 'function'
+    ? overrides({ directory, configPath, fixturePath, resultPath })
+    : overrides;
   await fs.promises.writeFile(configPath, JSON.stringify({
-    version: 1,
+    version: 2,
     token,
-    fixturePath,
+    fixturePaths: [fixturePath],
     resultPath,
-    ...overrides,
+    ...resolvedOverrides,
   }));
   return {
     directory,
@@ -33,6 +37,152 @@ async function writeCapabilityConfig(overrides = {}) {
     fixturePath,
     resultPath,
     tokenDigest: createHash('sha256').update(token).digest('hex'),
+  };
+}
+
+function createAccessibilityEvidence() {
+  return {
+    scope: {
+      claim: 'targeted packaged accessibility and responsive evidence',
+      limitations: 'This verifies the listed packaged DOM, keyboard, zoom, and viewport invariants only; it is not a complete WCAG conformance evaluation.',
+    },
+    globalOverflow: {
+      horizontal: false,
+      vertical: false,
+      toleranceCssPixels: 1,
+      allEssentialActionsInsideViewport: true,
+    },
+    essentialActions: {
+      openLocal: { visible: true, insideViewport: true, focusable: true, enabled: true, controlsNativeFileInput: true },
+      library: { visible: true, insideViewport: true, focusable: true, toggles: true },
+      camera: {
+        visible: true,
+        insideViewport: true,
+        focusable: true,
+        toggles: true,
+        menuInsideViewport: true,
+        menuScrollable: true,
+        menuOverflowYScrollable: true,
+      },
+    },
+    semantics: {
+      main: true,
+      tabs: { count: 2, valid: true, arrowNavigation: true },
+      dialog: { present: true, valid: true },
+      liveRegions: { count: 2, valid: true },
+    },
+    keyboard: {
+      viewportFocused: true,
+      arrowsHandled: true,
+      arrowsMovedCamera: true,
+      shiftArrowsHandled: true,
+      shiftArrowsMovedCamera: true,
+    },
+  };
+}
+
+function createPassingSelfTestHarness(fixturePath, capturePage) {
+  let bounds = { x: 40, y: 60, width: 1280, height: 850 };
+  let zoomFactor = 1;
+  let modelLoadObserved = false;
+  const applicationWindow = {
+    getBounds: vi.fn(() => ({ ...bounds })),
+    setSize: vi.fn((width, height) => { bounds = { ...bounds, width, height }; }),
+    setBounds: vi.fn((nextBounds) => { bounds = { ...nextBounds }; }),
+  };
+  const renderer = {
+    getURL: () => 'nexoip://app/',
+    getTitle: () => 'NexoIP 3D Viewer',
+    getZoomFactor: vi.fn(() => zoomFactor),
+    setZoomFactor: vi.fn(async (nextZoomFactor) => { zoomFactor = nextZoomFactor; }),
+    send: vi.fn(),
+    executeJavaScript: vi.fn(async (source) => {
+      if (source.includes('packagedStaleLoadFetch')) return true;
+      if (source.includes('return false;') && source.includes('__nexoipPackagedSwitchProbe?.intercepted')) {
+        return true;
+      }
+      if (source.includes('winningModelRemained')) {
+        return {
+          delayInstalled: true,
+          delayedRequestObserved: true,
+          winningModelLoaded: true,
+          delayedRequestReleased: true,
+          winningModelRemained: true,
+          loadingSettled: true,
+          dialogClosed: true,
+          contextHealthy: true,
+        };
+      }
+      if (source.includes('webglcontextlost')) {
+        return {
+          lossEventPrevented: true,
+          lossDialogVisible: true,
+          recoveryActionVisible: true,
+          generationAdvanced: true,
+          canvasReplaced: true,
+          modelReloaded: true,
+          loadingSettled: true,
+          dialogClosed: true,
+          contextHealthy: true,
+        };
+      }
+      if (source.includes('model-error-title')) {
+        return {
+          registered: true,
+          protocolBytesComplete: true,
+          errorDialogVisible: true,
+          safeErrorMessage: true,
+          failedMarkerAbsent: true,
+          loadingSettled: true,
+          canvasPresent: true,
+          recoveredToLibrary: true,
+        };
+      }
+      if (source.includes('data-loaded-model-id')) {
+        modelLoadObserved = true;
+        const sizeMatch = source.match(/const expectedSize = (\d+);/);
+        const size = sizeMatch ? Number(sizeMatch[1]) : (await fs.promises.stat(fixturePath)).size;
+        return {
+          bridgeAvailable: true,
+          modelBytes: size,
+          eventDispatches: 1,
+          exactModelMarker: true,
+          canvas: { present: true, width: 800, height: 600 },
+          webglContext: 'webgl2',
+          contextLost: false,
+          dialogOpened: false,
+        };
+      }
+      return {
+        bridgeAvailable: true,
+        bundledRuntimes: [
+          { runtimePath: '/draco/draco_decoder.wasm', status: 200, bytes: 1 },
+          { runtimePath: '/draco/draco_wasm_wrapper.js', status: 200, bytes: 1 },
+          { runtimePath: '/basis/basis_transcoder.js', status: 200, bytes: 1 },
+          { runtimePath: '/basis/basis_transcoder.wasm', status: 200, bytes: 1 },
+        ],
+        accessibility: createAccessibilityEvidence(),
+      };
+    }),
+  };
+  if (capturePage) {
+    renderer.capturePage = vi.fn(async () => {
+      if (!modelLoadObserved) throw new Error('Capture attempted before the model completed loading.');
+      return capturePage();
+    });
+  }
+
+  return {
+    applicationWindow,
+    renderer,
+    scanner: {
+      registerDroppedPath: async (candidatePath) => ({
+        id: createHash('sha256').update(candidatePath).digest('hex').slice(0, 48),
+        name: path.basename(candidatePath),
+        size: (await fs.promises.stat(candidatePath)).size,
+      }),
+      openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),
+    },
   };
 }
 
@@ -44,8 +194,53 @@ test('packaged self-test accepts a bounded capability with a canonical sibling r
     tokenDigest: capability.tokenDigest,
   });
 
-  expect(config.fixturePath).toBe(capability.fixturePath);
+  expect(config.fixturePaths).toEqual([capability.fixturePath]);
   expect(config.resultPath).toBe(path.join(await fs.promises.realpath(capability.directory), 'result-a1.json'));
+});
+
+test('packaged self-test accepts a canonical sibling screenshot target', async () => {
+  const capability = await writeCapabilityConfig(({ directory }) => ({
+    screenshotPath: path.join(directory, 'screenshot-a1b2.png'),
+  }));
+  const config = await loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: capability.configPath,
+    tokenDigest: capability.tokenDigest,
+  });
+
+  expect(config.screenshotPath).toBe(path.join(await fs.promises.realpath(capability.directory), 'screenshot-a1b2.png'));
+});
+
+test('packaged self-test accepts the unique positive and rejection format matrices', async () => {
+  const prepared = await preparePackagedFixtureMatrix();
+  try {
+    const fixturePaths = prepared.fixtures.map((fixture) => fixture.fixturePath);
+    const rejectedFixturePaths = prepared.rejectedFixtures.map((fixture) => fixture.fixturePath);
+    const loaderRejectionFixturePaths = prepared.loaderRejectedFixtures
+      .map((fixture) => fixture.fixturePath);
+    const capability = await writeCapabilityConfig({
+      fixturePaths,
+      rejectedFixturePaths,
+      loaderRejectionFixturePaths,
+    });
+    const config = await loadPackagedSelfTestConfig({
+      valid: true,
+      configPath: capability.configPath,
+      tokenDigest: capability.tokenDigest,
+    });
+
+    expect(config.fixturePaths).toEqual(await Promise.all(
+      fixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
+    expect(config.rejectedFixturePaths).toEqual(await Promise.all(
+      rejectedFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
+    expect(config.loaderRejectionFixturePaths).toEqual(await Promise.all(
+      loaderRejectionFixturePaths.map((fixturePath) => fs.promises.realpath(fixturePath)),
+    ));
+  } finally {
+    await prepared.cleanup();
+  }
 });
 
 test('packaged self-test accepts a temporary directory alias after canonicalisation', async () => {
@@ -60,9 +255,9 @@ test('packaged self-test accepts a temporary directory alias after canonicalisat
   const configPath = path.join(aliasDirectory, 'nexoip-packaged-self-test-b2.json');
   const resultPath = path.join(aliasDirectory, 'result-b2.json');
   await fs.promises.writeFile(configPath, JSON.stringify({
-    version: 1,
+    version: 2,
     token,
-    fixturePath: path.resolve('tests', 'fixtures', 'nexoip-sample.stl'),
+    fixturePaths: [path.resolve('tests', 'fixtures', 'nexoip-sample.stl')],
     resultPath,
   }));
 
@@ -72,6 +267,137 @@ test('packaged self-test accepts a temporary directory alias after canonicalisat
     tokenDigest: createHash('sha256').update(token).digest('hex'),
   });
   expect(config.resultPath).toBe(path.join(await fs.promises.realpath(realDirectory), 'result-b2.json'));
+});
+
+test('packaged self-test records hostile candidates rejected before catalog publication', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const rejectedFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'invalid',
+    'malformed.obj',
+  );
+  const harness = createPassingSelfTestHarness(fixturePath);
+  const registerValidFixture = harness.scanner.registerDroppedPath;
+  harness.scanner.registerDroppedPath = async (candidatePath) => {
+    if (candidatePath === rejectedFixturePath) throw new TypeError('Invalid dropped file.');
+    return registerValidFixture(candidatePath);
+  };
+
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: {
+      fixturePaths: [fixturePath],
+      rejectedFixturePaths: [rejectedFixturePath],
+    },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.rejectedFormatMatrix).toEqual([{
+    name: 'malformed.obj',
+    extension: 'obj',
+    size: (await fs.promises.stat(rejectedFixturePath)).size,
+    rejectedBeforePublication: true,
+  }]);
+});
+
+test('packaged self-test records a valid model with a missing dependency as safely recoverable', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const loaderRejectionFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'invalid',
+    'missing-material.obj',
+  );
+  const harness = createPassingSelfTestHarness(fixturePath);
+
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: {
+      fixturePaths: [fixturePath],
+      loaderRejectionFixturePaths: [loaderRejectionFixturePath],
+    },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.loaderRejectedFormatMatrix).toEqual([{
+    name: 'missing-material.obj',
+    extension: 'obj',
+    size: (await fs.promises.stat(loaderRejectionFixturePath)).size,
+    registered: true,
+    protocolBytesComplete: true,
+    errorDialogVisible: true,
+    safeErrorMessage: true,
+    failedMarkerAbsent: true,
+    loadingSettled: true,
+    canvasPresent: true,
+    recoveredToLibrary: true,
+  }]);
+  expect(report.checks.preloadContract.loaderRejectedCount).toBe(1);
+  expect(JSON.stringify(report.checks.loaderRejectedFormatMatrix)).not.toContain(loaderRejectionFixturePath);
+});
+
+test('packaged self-test records a replaced and healthy WebGL generation', async () => {
+  const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const harness = createPassingSelfTestHarness(fixturePath);
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: { fixturePaths: [fixturePath] },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.webglRecovery).toEqual({
+    lossEventPrevented: true,
+    lossDialogVisible: true,
+    recoveryActionVisible: true,
+    generationAdvanced: true,
+    canvasReplaced: true,
+    modelReloaded: true,
+    loadingSettled: true,
+    dialogClosed: true,
+    contextHealthy: true,
+  });
+  expect(harness.renderer.executeJavaScript.mock.calls.some(([source]) => (
+    source.includes('webglcontextlost') && source.includes('Recuperar vista')
+  ))).toBe(true);
+});
+
+test('packaged self-test proves that a delayed obsolete load cannot replace the winning model', async () => {
+  const firstFixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
+  const winningFixturePath = path.resolve(
+    'tests',
+    'fixtures',
+    'format-matrix',
+    'ply-mesh',
+    'colored-triangle.ply',
+  );
+  const harness = createPassingSelfTestHarness(firstFixturePath);
+  const report = await runPackagedSelfTest({
+    ...harness,
+    config: { fixturePaths: [firstFixturePath, winningFixturePath] },
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.checks.staleLoadCancellation).toEqual({
+    delayInstalled: true,
+    delayedRequestObserved: true,
+    winningModelLoaded: true,
+    delayedRequestReleased: true,
+    winningModelRemained: true,
+    loadingSettled: true,
+    dialogClosed: true,
+    contextHealthy: true,
+  });
+  expect(harness.renderer.send).toHaveBeenCalledTimes(4);
+  expect(harness.renderer.executeJavaScript.mock.calls.some(([source]) => (
+    source.includes('packagedStaleLoadFetch')
+  ))).toBe(true);
 });
 
 test('packaged self-test rejects result paths outside the capability directory', async () => {
@@ -86,6 +412,163 @@ test('packaged self-test rejects result paths outside the capability directory',
   })).rejects.toThrow('configuration is invalid');
 });
 
+test.each([
+  ['a relative screenshot path', () => 'screenshot-a1b2.png'],
+  ['a non-conforming screenshot filename', ({ directory }) => path.join(directory, 'capture-a1b2.png')],
+  ['a screenshot path outside the capability directory', () => path.join(os.tmpdir(), 'screenshot-a1b2.png')],
+  ['a screenshot traversal path', ({ directory }) => `${directory}${path.sep}nested${path.sep}..${path.sep}screenshot-a1b2.png`],
+])('packaged self-test rejects %s', async (_label, createScreenshotPath) => {
+  const capability = await writeCapabilityConfig((context) => ({
+    screenshotPath: createScreenshotPath(context),
+  }));
+
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: capability.configPath,
+    tokenDigest: capability.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+});
+
+test('packaged self-test keeps the capability digest check when a screenshot is requested', async () => {
+  const capability = await writeCapabilityConfig(({ directory }) => ({
+    screenshotPath: path.join(directory, 'screenshot-a1b2.png'),
+  }));
+
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: capability.configPath,
+    tokenDigest: '00'.repeat(32),
+  })).rejects.toThrow('capability check failed');
+});
+
+test('packaged self-test rejects legacy, duplicate, and oversized fixture capabilities', async () => {
+  const legacy = await writeCapabilityConfig({ version: 1 });
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: legacy.configPath,
+    tokenDigest: legacy.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const duplicate = await writeCapabilityConfig({
+    fixturePaths: [
+      path.resolve('tests', 'fixtures', 'nexoip-sample.stl'),
+      path.resolve('tests', 'fixtures', 'nexoip-sample.stl'),
+    ],
+  });
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: duplicate.configPath,
+    tokenDigest: duplicate.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const crossMatrixDuplicate = await writeCapabilityConfig(({ fixturePath }) => ({
+    rejectedFixturePaths: [fixturePath],
+  }));
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: crossMatrixDuplicate.configPath,
+    tokenDigest: crossMatrixDuplicate.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const loaderCrossMatrixDuplicate = await writeCapabilityConfig(({ fixturePath }) => ({
+    loaderRejectionFixturePaths: [fixturePath],
+  }));
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: loaderCrossMatrixDuplicate.configPath,
+    tokenDigest: loaderCrossMatrixDuplicate.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+
+  const oversized = await writeCapabilityConfig({
+    fixturePaths: Array.from({ length: 13 }, () => path.resolve('tests', 'fixtures', 'nexoip-sample.stl')),
+  });
+  await expect(loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: oversized.configPath,
+    tokenDigest: oversized.tokenDigest,
+  })).rejects.toThrow('configuration is invalid');
+});
+
+test('packaged self-test atomically records a main-process PNG capture after the selected model loads', async () => {
+  const capability = await writeCapabilityConfig(({ directory }) => ({
+    screenshotPath: path.join(directory, 'screenshot-a1b2.png'),
+  }));
+  const config = await loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: capability.configPath,
+    tokenDigest: capability.tokenDigest,
+  });
+  const png = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x6d, 0x6f, 0x63, 0x6b,
+  ]);
+  const nativeImage = {
+    isEmpty: vi.fn(() => false),
+    getSize: vi.fn(() => ({ width: 1280, height: 720 })),
+    toPNG: vi.fn(() => png),
+  };
+  const harness = createPassingSelfTestHarness(capability.fixturePath, () => nativeImage);
+
+  const report = await runPackagedSelfTest({
+    config,
+    scanner: harness.scanner,
+    renderer: harness.renderer,
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('passed');
+  expect(harness.renderer.capturePage).toHaveBeenCalledOnce();
+  expect(nativeImage.isEmpty).toHaveBeenCalledOnce();
+  expect(nativeImage.getSize).toHaveBeenCalledOnce();
+  expect(nativeImage.toPNG).toHaveBeenCalledOnce();
+  const screenshotProbe = harness.renderer.executeJavaScript.mock.calls
+    .map(([source]) => source)
+    .find((source) => source.includes('prepareScreenshotFrame'));
+  expect(screenshotProbe).toContain('transientLoadStatusVisible');
+  expect(screenshotProbe).toContain('Cerrar biblioteca de modelos');
+  expect(screenshotProbe).toContain('Abrir propiedades del modelo');
+  expect(report.checks.screenshot).toEqual({
+    filename: 'screenshot-a1b2.png',
+    width: 1280,
+    height: 720,
+    bytes: png.length,
+  });
+  await expect(fs.promises.readFile(config.screenshotPath)).resolves.toEqual(png);
+  await expect(fs.promises.readdir(capability.directory)).resolves.not.toContain(
+    expect.stringContaining('.screenshot-a1b2.png.'),
+  );
+});
+
+test.each([
+  ['a missing main-process capture API', undefined, 'screenshot capture is unavailable'],
+  ['an empty NativeImage', () => ({
+    isEmpty: () => true,
+    getSize: () => ({ width: 1280, height: 720 }),
+    toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  }), 'screenshot capture is empty'],
+])('packaged self-test fails closed for %s', async (_label, createNativeImage, expectedError) => {
+  const capability = await writeCapabilityConfig(({ directory }) => ({
+    screenshotPath: path.join(directory, 'screenshot-a1b2.png'),
+  }));
+  const config = await loadPackagedSelfTestConfig({
+    valid: true,
+    configPath: capability.configPath,
+    tokenDigest: capability.tokenDigest,
+  });
+  const harness = createPassingSelfTestHarness(capability.fixturePath, createNativeImage);
+
+  const report = await runPackagedSelfTest({
+    config,
+    scanner: harness.scanner,
+    renderer: harness.renderer,
+    window: harness.applicationWindow,
+  });
+
+  expect(report.status).toBe('failed');
+  expect(report.error).toContain(expectedError);
+  expect(fs.existsSync(config.screenshotPath)).toBe(false);
+});
+
 test('packaged self-test fails closed when it cannot control the minimum accessibility viewport', async () => {
   const fixturePath = path.resolve('tests', 'fixtures', 'nexoip-sample.stl');
   const fixtureStats = await fs.promises.stat(fixturePath);
@@ -95,7 +578,7 @@ test('packaged self-test fails closed when it cannot control the minimum accessi
     size: fixtureStats.size,
   };
   const report = await runPackagedSelfTest({
-    config: { fixturePath, resultPath: path.join(os.tmpdir(), 'result-a1.json') },
+    config: { fixturePaths: [fixturePath], resultPath: path.join(os.tmpdir(), 'result-a1.json') },
     scanner: {
       registerDroppedPath: async () => model,
       openModelAsset: async () => ({ stream: Readable.from(Buffer.from('fixture')) }),

@@ -23,8 +23,14 @@ release/
 *.key
 *.p12
 *.pfx
+*.pvk
+*.snk
+*.jks
+*.keystore
+*.kdbx
 *.cer
 *.crt
+.secrets/
 *.db
 *.sqlite
 *.sqlite-*
@@ -49,3 +55,4 @@ desktop.ini
 # Local models and generated documentation media
 demo_models/
 .github/assets/*.tmp.*
+docs/codebase/.codebase-scan.txt

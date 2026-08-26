@@ -8,27 +8,19 @@ change the MIT license that applies to NexoIP 3D Viewer itself.
 Runtime components
 ------------------
 
-- React and React DOM 18.3.1 - MIT License
+- React and React DOM 19.2.8 - MIT License
   Copyright (c) Facebook, Inc. and its affiliates.
   https://react.dev/
 
-- React scheduler 0.23.2 - MIT License
+- React scheduler 0.27.0 - MIT License
   Copyright (c) Facebook, Inc. and its affiliates.
   https://www.npmjs.com/package/scheduler
-
-- loose-envify 1.4.0 - MIT License
-  Copyright (c) 2015 Andres Suarez <zertosh@gmail.com>.
-  https://www.npmjs.com/package/loose-envify
-
-- js-tokens 4.0.0 - MIT License
-  Copyright (c) 2014-2018 Simon Lydell.
-  https://www.npmjs.com/package/js-tokens
 
 - Three.js 0.165.0 - MIT License
   Copyright (c) 2010-2024 three.js authors.
   https://threejs.org/
 
-- Lucide React 0.395.0 - ISC License
+- Lucide React 1.33.0 - ISC License
   Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022
   as part of Feather (MIT). All other copyright (c) for Lucide are held
   by Lucide Contributors 2022.
@@ -81,9 +73,8 @@ Electron packages also include LICENSE.electron.txt and
 LICENSES.chromium.html alongside the executable.
 
 
-MIT License (React, React DOM, scheduler, loose-envify, js-tokens,
-Three.js, and meshoptimizer)
---------------------------------------------------------------
+MIT License (React, React DOM, scheduler, Three.js, and meshoptimizer)
+-----------------------------------------------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

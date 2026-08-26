@@ -1,17 +1,15 @@
 import path from 'node:path';
+import { SUPPORTED_MODEL_FORMATS } from '../shared/model-formats.js';
 
 export const DEV_RENDERER_URL = 'http://127.0.0.1:3000/';
 export const PACKAGED_APP_ORIGIN = 'nexoip://app';
+export const KTX2_TRANSCODER_WORKER_PATH = '/basis/ktx2-transcoder-worker.js';
+export const PACKAGED_RENDERER_CSP = 'default-src \'self\'; base-uri \'none\'; object-src \'none\'; frame-src \'none\'; form-action \'none\'; script-src \'self\' \'wasm-unsafe-eval\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob:; font-src \'self\'; connect-src \'self\' data: blob:; worker-src \'self\' blob:';
+export const PACKAGED_KTX2_WORKER_CSP = 'default-src \'none\'; base-uri \'none\'; object-src \'none\'; script-src \'self\' \'unsafe-eval\' \'wasm-unsafe-eval\'; connect-src \'none\'; worker-src \'none\'; form-action \'none\'';
 export const OPAQUE_ID_PATTERN = /^[a-f0-9]{48}$/;
-export const SUPPORTED_MODEL_EXTENSIONS = Object.freeze([
-  '.glb',
-  '.gltf',
-  '.obj',
-  '.stl',
-  '.fbx',
-  '.ply',
-  '.dae',
-]);
+export const SUPPORTED_MODEL_EXTENSIONS = Object.freeze(
+  SUPPORTED_MODEL_FORMATS.map((extension) => `.${extension}`),
+);
 export const SUPPORTED_MODEL_EXTENSION_SET = new Set(SUPPORTED_MODEL_EXTENSIONS);
 export const SUPPORTED_SIDECAR_EXTENSIONS = new Set([
   '.bin',
@@ -52,6 +50,12 @@ const MODEL_ASSET_MIME_TYPES = new Map([
   ['.tga', 'image/x-tga'],
   ['.webp', 'image/webp'],
 ]);
+
+export function getPackagedContentSecurityPolicy(pathname) {
+  return pathname === KTX2_TRANSCODER_WORKER_PATH
+    ? PACKAGED_KTX2_WORKER_CSP
+    : PACKAGED_RENDERER_CSP;
+}
 
 export function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

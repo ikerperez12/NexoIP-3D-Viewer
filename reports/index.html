@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Readiness — nexoip-3d-viewer</title>
+  <style>
+    :root {
+      --bg:#0f1115; --panel:#161a22; --panel-2:#1d2230; --border:#262c3a;
+      --text:#e6e9ef; --muted:#8a93a6; --accent:#6ea8ff;
+      --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    }
+    * { box-sizing: border-box; }
+    html,body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+    a { color: var(--accent); }
+    header { padding: 28px 32px; border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg,#141823,#0f1115); }
+    header h1 { margin: 0 0 4px; font-size: 22px; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 24px 32px 80px; }
+    .panel { background:var(--panel); border:1px solid var(--border);
+      border-radius:10px; padding:20px; margin-bottom:18px; }
+    .grid { display:grid; gap:16px; }
+    .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+    .kpi .num { font-size: 30px; font-weight: 700; }
+    .kpi .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+    .badge { display:inline-block; padding:3px 10px; border-radius:999px;
+      font-size:12px; font-weight:600; }
+    .lvl-1 { background:#3a1f24; color:#f87171; }
+    .lvl-2 { background:#3b2c1d; color:#fbbf24; }
+    .lvl-3 { background:#2c3119; color:#d3e85e; }
+    .lvl-4 { background:#1d3325; color:#4ade80; }
+    .lvl-5 { background:#1c2c3d; color:#6ea8ff; }
+    .bar { height:8px; background:var(--panel-2); border-radius:4px; overflow:hidden; }
+    .bar > span { display:block; height:100%; background: var(--accent); }
+    .bar.good > span { background: var(--good); }
+    .bar.warn > span { background: var(--warn); }
+    .bar.bad  > span { background: var(--bad); }
+    table { width:100%; border-collapse:collapse; }
+    th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); font-size:13px; }
+    th { color:var(--muted); font-weight:500; text-transform:uppercase; font-size:11px; letter-spacing:.8px; }
+    code { background:#0a0c11; padding:1px 6px; border-radius:4px; }
+    h2 { font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin:0 0 12px; }
+    .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+    .dot.good { background:var(--good); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+    footer { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
+    .pillar { background:var(--panel-2); border:1px solid var(--border);
+      border-radius:8px; padding:14px 16px; }
+    .pillar h3 { margin:0 0 6px; font-size:15px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .pillar .why  { color:var(--muted); font-size:13px; margin:8px 0 0; }
+    .pillar .what { font-size:13px; margin:6px 0 0; }
+    .pillar .rec  { font-size:13px; margin:8px 0 0; }
+    .rel { font-size:10px; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.6px; font-weight:600; }
+    .rel.high   { background:#1c2c3d; color:#6ea8ff; }
+    .rel.medium { background:#2c3119; color:#d3e85e; }
+    .rel.low    { background:#262c3a; color:#8a93a6; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI Readiness Report</h1>
+    <div class="meta"><strong>nexoip-3d-viewer</strong> · Assessed 2026-08-25T00:26:59.581Z · <span class="badge lvl-1">L0 — Functional not achieved</span> · Aggregate score <strong>not emitted</strong> · Grade <strong>not emitted</strong></div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Scope and interpretation</h2>
+      <p>AgentRC measures how ready a repository is to give useful context to AI coding agents across nine engineering and AI-setup pillars. This is an AI/contributor-readiness assessment, <strong>not a stable-release certification</strong> for the NexoIP desktop application.</p>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px">The run used AgentRC built-in defaults, with no custom policy, in a non-monorepo repository. AgentRC did not emit an aggregate score or grade, so this report preserves the per-pillar result and does not invent either value.</p>
+    </section>
+
+    <section class="grid cols-3">
+      <div class="panel kpi"><span class="lbl">Maturity</span><div class="num"><span class="badge lvl-1">L0 — Below Functional</span></div></div>
+      <div class="panel kpi"><span class="lbl">Overall score</span><div class="num">—</div><div style="color:var(--muted);font-size:12px">Not emitted in verified input</div></div>
+      <div class="panel kpi"><span class="lbl">Pass rate</span><div class="num">—</div><div style="color:var(--muted);font-size:12px">Not emitted by AgentRC</div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Maturity Progression</h2>
+      <table><thead><tr><th>Level</th><th>Name</th><th>Verified state</th></tr></thead><tbody>
+        <tr><td>L5</td><td>Autonomous</td><td>Not achieved</td></tr>
+        <tr><td>L4</td><td>Optimized</td><td>Not achieved</td></tr>
+        <tr><td>L3</td><td>Standardized</td><td>2 / 5 criteria (40%)</td></tr>
+        <tr><td>L2</td><td>Documented</td><td>3 / 9 criteria (33.3%)</td></tr>
+        <tr><td>L1</td><td>Functional</td><td>7 / 10 criteria (70%); threshold not reached</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>Repo Health Breakdown</h2>
+      <div class="grid cols-2">
+        <div class="pillar"><h3><span class="dot warn"></span>Style &amp; Validation <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">1 / 2 · 50%</span></h3><div class="bar warn"><span style="width:50%"></span></div><p class="what"><strong>What it measures:</strong> Consistent validation and formatting/type-safety guardrails.</p><p class="why"><strong>Why it matters for AI:</strong> Clear automated feedback constrains generated changes before review.</p><p class="rec"><strong>Current state:</strong> Lint passed; AgentRC did not detect a typecheck configuration or formatter.</p><p class="rec"><strong>Recommendation:</strong> Add typechecking only with a passing baseline and a maintained adoption plan; plan formatting rather than adding an unverified tool.</p></div>
+        <div class="pillar"><h3><span class="dot warn"></span>Build System <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">2 / 3 · 66.7%</span></h3><div class="bar warn"><span style="width:66.7%"></span></div><p class="what"><strong>What it measures:</strong> Build commands and CI evidence that contributors can repeat.</p><p class="why"><strong>Why it matters for AI:</strong> Agents can safely validate changes when the project build contract is explicit.</p><p class="rec"><strong>Current state:</strong> Root build script and CI passed. AgentRC’s area-build signal is absent.</p><p class="rec"><strong>Recommendation:</strong> Treat area build scripts as a non-goal: <code>electron/</code> and <code>tests/</code> are not independent packages.</p></div>
+        <div class="pillar"><h3><span class="dot warn"></span>Testing <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">1 / 2 · 50%</span></h3><div class="bar warn"><span style="width:50%"></span></div><p class="what"><strong>What it measures:</strong> A repeatable test command and measurable test coverage evidence.</p><p class="why"><strong>Why it matters for AI:</strong> Tests give generated code a concrete correctness boundary.</p><p class="rec"><strong>Current state:</strong> AgentRC detected the test script but not the pinned V8 provider and enforced numeric floors now present in <code>vite.config.mjs</code>.</p><p class="rec"><strong>Recommendation:</strong> Treat this as a detector limitation; keep <code>npm run test:coverage</code> in the authoritative project gate.</p></div>
+        <div class="pillar"><h3><span class="dot warn"></span>Documentation <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">2 / 3 · 66.7%</span></h3><div class="bar warn"><span style="width:66.7%"></span></div><p class="what"><strong>What it measures:</strong> Contributor and architecture context.</p><p class="why"><strong>Why it matters for AI:</strong> Scoped, current documentation reduces incorrect assumptions about ownership and behavior.</p><p class="rec"><strong>Current state:</strong> README, CONTRIBUTING, and an architecture document were detected; focused area documentation/instructions were not.</p><p class="rec"><strong>Recommendation:</strong> Add focused area documentation where maintenance cost justifies it, then keep it synchronized with code.</p></div>
+        <div class="pillar"><h3><span class="dot warn"></span>Dev Environment <span class="rel medium">AI relevance: medium</span><span style="margin-left:auto;color:var(--muted);font-size:13px">1 / 2 · 50%</span></h3><div class="bar warn"><span style="width:50%"></span></div><p class="what"><strong>What it measures:</strong> Reproducible local setup and dependency installation.</p><p class="why"><strong>Why it matters for AI:</strong> A defined environment makes suggested commands repeatable for humans and agents.</p><p class="rec"><strong>Current state:</strong> Lockfile detected. <code>.env.example</code> is intentionally absent because this offline application has no environment setup or secrets.</p><p class="rec"><strong>Recommendation:</strong> Do not add a fake environment file merely to satisfy a heuristic.</p></div>
+        <div class="pillar"><h3><span class="dot bad"></span>Code Quality <span class="rel medium">AI relevance: medium</span><span style="margin-left:auto;color:var(--muted);font-size:13px">0 / 1 · 0%</span></h3><div class="bar bad"><span style="width:0%"></span></div><p class="what"><strong>What it measures:</strong> A standalone formatter configuration.</p><p class="why"><strong>Why it matters for AI:</strong> Mechanical formatting can reduce review noise.</p><p class="rec"><strong>Current state:</strong> EditorConfig and strict ESLint are present; AgentRC requires a separate Prettier or Biome configuration for this criterion.</p><p class="rec"><strong>Recommendation:</strong> Add a formatter only through a reviewed baseline migration, not merely to raise a heuristic score.</p></div>
+        <div class="pillar"><h3><span class="dot bad"></span>Observability <span class="rel low">AI relevance: low</span><span style="margin-left:auto;color:var(--muted);font-size:13px">0 / 1 · 0%</span></h3><div class="bar bad"><span style="width:0%"></span></div><p class="what"><strong>What it measures:</strong> Signals for diagnosing production behavior.</p><p class="why"><strong>Why it matters for AI:</strong> Operational evidence can improve maintenance suggestions when such a service exists.</p><p class="rec"><strong>Current state:</strong> Remote observability is intentionally absent to preserve privacy and avoid telemetry.</p><p class="rec"><strong>Recommendation:</strong> Keep this as an explicit non-goal; do not add telemetry, APM, or remote logging merely for the score.</p></div>
+        <div class="pillar"><h3><span class="dot good"></span>Security &amp; Governance <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">4 / 4 · 100%</span></h3><div class="bar good"><span style="width:100%"></span></div><p class="what"><strong>What it measures:</strong> Security policy, dependency governance, and contribution controls.</p><p class="why"><strong>Why it matters for AI:</strong> Guardrails reduce the chance that automated contributions widen the attack surface.</p><p class="rec"><strong>Current state:</strong> LICENSE, SECURITY, Dependabot and the new truthful CODEOWNERS map all passed.</p><p class="rec"><strong>Recommendation:</strong> Preserve these controls and keep ownership synchronized with actual maintainers.</p></div>
+      </div>
+    </section>
+
+    <section class="panel"><h2>AI Setup Breakdown</h2><div class="grid cols-2">
+      <div class="pillar"><h3><span class="dot warn"></span>AI Tooling <span class="rel high">AI relevance: high</span><span style="margin-left:auto;color:var(--muted);font-size:13px">1 / 6 · 16.7%</span></h3><div class="bar warn"><span style="width:16.7%"></span></div><p class="what"><strong>What it measures:</strong> Agent-specific instructions, scoped guidance, and related contributor context.</p><p class="why"><strong>Why it matters for AI:</strong> It directly shapes the context an AI coding agent receives.</p><p class="rec"><strong>Current state:</strong> The new root <code>AGENTS.md</code> passed and records the real privacy, security, testing, fixture, and release boundaries.</p><p class="rec"><strong>Recommendation:</strong> Add area instructions only when they carry distinct durable rules; do not add MCP, APM, custom agents, or copied skills simply for a score.</p></div>
+    </div></section>
+
+    <section class="panel"><h2>Extras (informational, do not affect score)</h2><table><thead><tr><th></th><th>Extra</th><th>Status</th></tr></thead><tbody>
+      <tr><td>✅</td><td>Agent instructions</td><td>Root AGENTS.md detected</td></tr>
+      <tr><td>✅</td><td>Pull-request template</td><td>Detected</td></tr>
+      <tr><td>◻</td><td>Pre-commit automation</td><td>Not reported as detected</td></tr>
+      <tr><td>✅</td><td>Architecture document</td><td>Detected</td></tr>
+    </tbody></table></section>
+
+    <section class="panel"><h2>Prioritised Remediation Plan</h2>
+      <h3 style="color:var(--bad)">🔴 Fix First (high impact / low effort)</h3><table><thead><tr><th>#</th><th>Finding</th><th>File / config</th><th>Why it matters</th></tr></thead><tbody>
+        <tr><td>1</td><td>Type checking is not configured</td><td>Adoption plan before <code>tsconfig.json</code></td><td>Useful for risky interfaces, but only after measuring and resolving the JavaScript baseline.</td></tr>
+        <tr><td>2</td><td>Coverage detector misses the real V8 gate</td><td><code>vite.config.mjs</code></td><td>The repository already enforces measured numeric floors; keep the project gate authoritative.</td></tr>
+      </tbody></table>
+      <h3 style="color:var(--warn)">🟡 Fix Next (medium impact / low effort)</h3><table><thead><tr><th>#</th><th>Finding</th><th>File / config</th><th>Why</th></tr></thead><tbody>
+        <tr><td>3</td><td>Area-specific instructions not detected</td><td>Only where rules differ from root <code>AGENTS.md</code></td><td>Avoid duplicated guidance; add scoped rules only when maintenance evidence justifies them.</td></tr>
+        <tr><td>4</td><td>Focused area context is limited</td><td>Existing area documentation</td><td>Clarifies scoped contracts without treating ordinary folders as packages.</td></tr>
+      </tbody></table>
+      <h3 style="color:var(--accent)">🔵 Plan (medium impact / medium effort)</h3><table><thead><tr><th>#</th><th>Finding</th><th>File / config</th><th>Why</th></tr></thead><tbody>
+        <tr><td>5</td><td>No formatter detected</td><td>Formatter configuration and CI only after adoption</td><td>Formatting can improve consistency, but needs a reviewed baseline and ownership.</td></tr>
+        <tr><td>6</td><td>Heuristic gaps not aligned with product design</td><td>No implementation change</td><td>Do not add fake <code>.env.example</code>, telemetry, APM, MCP, or custom agents for an AI-readiness score.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="panel"><h2>Next Steps</h2><ol>
+      <li>Keep the new CODEOWNERS and V8 coverage gate synchronized with the repository.</li>
+      <li>Evaluate type checking and formatter adoption only with a passing, reviewed migration baseline.</li>
+      <li>Keep the root <code>AGENTS.md</code> concise and add area guidance only for genuinely distinct contracts.</li>
+      <li>Use <code>agentrc readiness --fail-level &lt;n&gt;</code> in CI only after selecting a policy and a threshold the maintainers intend to enforce.</li>
+    </ol></section>
+
+    <details class="panel"><summary style="cursor:pointer;color:var(--muted)">Raw AgentRC JSON equivalent (verified inputs)</summary><pre style="overflow:auto;font-size:11px;color:#b8c0d2">{
+  "generatedAt": "2026-08-25T00:26:59.581Z",
+  "repository": { "name": "nexoip-3d-viewer", "monorepo": false },
+  "policy": null,
+  "summary": {
+    "achievedLevel": 0,
+    "aggregateScore": null,
+    "grade": null,
+    "namedPassingChecks": 12,
+    "pillarPassingChecks": 12,
+    "pillarCriteriaTotal": 24,
+    "inputConsistency": "AgentRC emitted no aggregate score or grade"
+  },
+  "pillars": [
+    { "name": "Style &amp; Validation", "passed": 1, "total": 2 },
+    { "name": "Build System", "passed": 2, "total": 3 },
+    { "name": "Testing", "passed": 1, "total": 2 },
+    { "name": "Documentation", "passed": 2, "total": 3 },
+    { "name": "Dev Environment", "passed": 1, "total": 2 },
+    { "name": "Code Quality", "passed": 0, "total": 1 },
+    { "name": "Observability", "passed": 0, "total": 1 },
+    { "name": "Security &amp; Governance", "passed": 4, "total": 4 },
+    { "name": "AI Tooling", "passed": 1, "total": 6 }
+  ],
+  "levels": [
+    { "name": "Functional", "passed": 7, "total": 10, "percent": 70 },
+    { "name": "Documented", "passed": 3, "total": 9, "percent": 33.3 },
+    { "name": "Standardized", "passed": 2, "total": 5, "percent": 40 }
+  ],
+  "passedChecks": ["lint", "build script", "CI", "test script", "README", "CONTRIBUTING", "lockfile", "CODEOWNERS", "LICENSE", "SECURITY", "Dependabot", "AGENTS.md"],
+  "relevantUnmetChecks": ["typecheck config", "formatter", "area docs", "area instructions"],
+  "intentionalNonGoals": [".env.example (offline app: no environment setup or secrets)", "remote observability (privacy/no telemetry)", "area build scripts for shared, electron and tests (not independent packages)", "MCP/APM/custom agents merely to raise score" ]
+}</pre></details>
+    <script type="application/json" id="raw-data">{"generatedAt":"2026-08-25T00:26:59.581Z","repository":{"name":"nexoip-3d-viewer","monorepo":false},"policy":null,"summary":{"achievedLevel":0,"aggregateScore":null,"grade":null,"namedPassingChecks":12,"pillarPassingChecks":12,"pillarCriteriaTotal":24,"inputConsistency":"AgentRC emitted no aggregate score or grade"},"pillars":[{"name":"Style & Validation","passed":1,"total":2},{"name":"Build System","passed":2,"total":3},{"name":"Testing","passed":1,"total":2},{"name":"Documentation","passed":2,"total":3},{"name":"Dev Environment","passed":1,"total":2},{"name":"Code Quality","passed":0,"total":1},{"name":"Observability","passed":0,"total":1},{"name":"Security & Governance","passed":4,"total":4},{"name":"AI Tooling","passed":1,"total":6}],"levels":[{"name":"Functional","passed":7,"total":10,"percent":70},{"name":"Documented","passed":3,"total":9,"percent":33.3},{"name":"Standardized","passed":2,"total":5,"percent":40}],"passedChecks":["lint","build script","CI","test script","README","CONTRIBUTING","lockfile","CODEOWNERS","LICENSE","SECURITY","Dependabot","AGENTS.md"],"relevantUnmetChecks":["typecheck config","formatter","area docs","area instructions"],"intentionalNonGoals":[".env.example (offline app: no environment setup or secrets)","remote observability (privacy/no telemetry)","area build scripts for shared, electron and tests (not independent packages)","MCP/APM/custom agents merely to raise score"]}</script>
+  </main>
+  <footer>Generated from the verified AgentRC readiness inputs · self-contained static report.</footer>
+</body>
+</html>

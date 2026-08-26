@@ -39,4 +39,4 @@ The full boundary model is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTUR
 
 ## Release verification
 
-The alpha release includes SHA-256 checksums, a CycloneDX SBOM, and GitHub build provenance. Its Windows executables are not Authenticode-signed, so verify these materials before running them. Checksums establish integrity, not publisher identity. A stable release is blocked until all distributed executables carry a valid trusted signature and the remaining [product-readiness gates](docs/PRODUCT_READINESS.md) pass.
+The alpha release includes SHA-256 checksums, a CycloneDX SBOM, and GitHub build provenance. Its Windows executables are not Authenticode-signed, so verify these materials before running them. Checksums establish integrity, not publisher identity. A stable release is blocked until all distributed executables carry a valid trusted signature and the remaining [product-readiness gates](docs/PRODUCT_READINESS.md) pass. The [release verification guide](docs/RELEASE_VERIFICATION.md) shows the exact alpha and future-stable checks, including expected publisher identity, timestamp, and provenance.
