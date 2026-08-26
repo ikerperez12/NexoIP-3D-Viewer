@@ -7,12 +7,10 @@ const notices = fs.readFileSync(new URL('../THIRD_PARTY_NOTICES.txt', import.met
 const expectedRuntimePackages = {
   '@fontsource/inter': { version: '5.3.0', license: 'OFL-1.1', notice: 'Inter - SIL Open Font License 1.1' },
   '@fontsource/jetbrains-mono': { version: '5.3.0', license: 'OFL-1.1', notice: 'JetBrains Mono - SIL Open Font License 1.1' },
-  'js-tokens': { version: '4.0.0', license: 'MIT', notice: 'js-tokens 4.0.0 - MIT License' },
-  'loose-envify': { version: '1.4.0', license: 'MIT', notice: 'loose-envify 1.4.0 - MIT License' },
-  'lucide-react': { version: '0.395.0', license: 'ISC', notice: 'Lucide React 0.395.0 - ISC License' },
-  react: { version: '18.3.1', license: 'MIT', notice: 'React and React DOM 18.3.1 - MIT License' },
-  'react-dom': { version: '18.3.1', license: 'MIT', notice: 'React and React DOM 18.3.1 - MIT License' },
-  scheduler: { version: '0.23.2', license: 'MIT', notice: 'React scheduler 0.23.2 - MIT License' },
+  'lucide-react': { version: '1.33.0', license: 'ISC', notice: 'Lucide React 1.33.0 - ISC License' },
+  react: { version: '19.2.8', license: 'MIT', notice: 'React and React DOM 19.2.8 - MIT License' },
+  'react-dom': { version: '19.2.8', license: 'MIT', notice: 'React and React DOM 19.2.8 - MIT License' },
+  scheduler: { version: '0.27.0', license: 'MIT', notice: 'React scheduler 0.27.0 - MIT License' },
   three: { version: '0.165.0', license: 'MIT', notice: 'Three.js 0.165.0 - MIT License' },
 };
 
@@ -46,7 +44,7 @@ test('third-party notices cover every production package pinned in the lockfile'
 });
 
 test('third-party notices include the full redistributed license families', () => {
-  expect(notices).toContain('MIT License (React, React DOM, scheduler, loose-envify, js-tokens,');
+  expect(notices).toContain('MIT License (React, React DOM, scheduler, Three.js, and meshoptimizer)');
   expect(notices).toContain('ISC License (Lucide)');
   expect(notices).toContain('SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007');
   expect(notices).toContain('Apache License\nVersion 2.0, January 2004');

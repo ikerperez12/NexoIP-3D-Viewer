@@ -2,7 +2,7 @@
 
 ## 1) Test Stack and Commands
 
-- Primary framework: Vitest 4.1.10 in a Node environment.
+- Primary framework: Vitest 4.1.11 in a Node environment.
 - Assertions/mocking: Vitest `expect`, `vi.fn`, spies, injected filesystem functions and temporary directories.
 - Packaged wrapper: Playwright 1.62.1 launches the no-CDP smoke command; the product self-test runs through a bounded local capability rather than a debugging transport.
 

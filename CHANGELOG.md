@@ -18,6 +18,7 @@ All notable changes are documented here. This project follows [Semantic Versioni
 - Renderer-facing error messages now remove local paths, control characters, and oversized parser diagnostics while retaining actionable recovery context.
 - Oversized textual glTF candidates now receive bounded prefix-and-suffix structure checks before catalog publication; valid large models remain discoverable without a full scan-time parse.
 - Escape now closes the panel that owns focus, and progressive scan status is announced to assistive technology only at meaningful milestones.
+- Consolidated the reviewed dependency branches on the canonical line: React/React DOM 19.2.8, Lucide React 1.33.0, Vite 8.2.2, the Vite React plugin 6.1.0, Vitest and its V8 coverage provider 4.1.11, and concurrently 10.0.5; refreshed the lockfile and third-party notices together.
 
 ### Security
 

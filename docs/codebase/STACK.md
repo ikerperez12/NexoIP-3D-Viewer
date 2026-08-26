@@ -15,9 +15,9 @@
 | Dependency | Version | Role in system | Evidence |
 | --- | --- | --- | --- |
 | Electron | 43.4.1 | Bundled desktop runtime; installed as development tooling but shipped by electron-builder | `package.json`, Electron build configuration |
-| React / React DOM | 18.3.1 | Renderer component and state model | `package.json:45`, `package.json:46`, `src/main.jsx:1` |
+| React / React DOM | 19.2.8 | Renderer component and state model | `package.json:45`, `package.json:46`, `src/main.jsx:1` |
 | Three.js | 0.165.0 | WebGL scene, cameras, loaders, controls and exporters | `package.json:47`, `src/components/Viewport3D.jsx:2`, `src/utils/loaders.js:1` |
-| Lucide React | 0.395.0 | UI icon components | `package.json:44`, `src/App.jsx:7` |
+| Lucide React | 1.33.0 | UI icon components | `package.json:44`, `src/App.jsx:7` |
 | Fontsource Inter / JetBrains Mono | 5.3.0 | Offline bundled UI fonts | `package.json:42`, `package.json:43`, `src/index.css:1` |
 
 All direct dependency versions are exact. The application sets `private: true` to prevent accidental npm publication; this does not change the MIT source licence.
@@ -26,10 +26,10 @@ All direct dependency versions are exact. The application sets `private: true` t
 
 | Tool | Purpose | Evidence |
 | --- | --- | --- |
-| Vite 8.2.1 | Renderer development server and production build | `package.json:64`, `vite.config.mjs:1` |
+| Vite 8.2.2 | Renderer development server and production build | `package.json:64`, `vite.config.mjs:1` |
 | Tailwind CSS 4.3.3 | Locally compiled renderer styles | `package.json:62`, `vite.config.mjs:3` |
 | ESLint 10.8.1 | JavaScript, React and Electron lint gate | `package.json:58`, `eslint.config.mjs:1` |
-| Vitest 4.1.10 | Node-environment unit and integration tests | `package.json:66`, `vite.config.mjs:36` |
+| Vitest 4.1.11 | Node-environment unit and integration tests | `package.json:66`, `vite.config.mjs:36` |
 | Playwright 1.62.1 | Packaged executable smoke wrapper | `package.json:51`, `playwright.config.mjs:1` |
 | electron-builder 26.15.3 | Windows directory, NSIS and portable packages | `package.json:56`, `package.json:72` |
 | `@electron/fuses` 2.1.3 | Verifies hardened Electron fuse state | `package.json:49`, `scripts/verify-fuses.mjs:1` |
