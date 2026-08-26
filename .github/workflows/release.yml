@@ -94,6 +94,98 @@ jobs:
           ref: ${{ needs.verify-release-source.outputs.source_sha }}
           persist-credentials: false
 
+      - name: Validate committed Electron runtime baseline
+        id: electron_runtime_baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $electronVersion = [string]$package.devDependencies.electron
+          if ($electronVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Electron runtime version '$electronVersion' must be exact SemVer."
+          }
+
+          $manifestPath = 'security/electron-runtime-baselines.json'
+          try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          } catch {
+            throw "Electron runtime baseline manifest is invalid JSON: $($_.Exception.Message)"
+          }
+          $expectedManifestProperties = @('schemaVersion', 'baselines')
+          $unexpectedManifestProperties = Compare-Object -ReferenceObject $expectedManifestProperties -DifferenceObject @($manifest.PSObject.Properties.Name)
+          if ($unexpectedManifestProperties -or $manifest.schemaVersion -cne 1 -or @($manifest.baselines).Count -lt 1) {
+            throw 'Electron runtime baseline manifest must use schemaVersion 1 with a non-empty baselines array and no unexpected top-level fields.'
+          }
+
+          $baselines = @($manifest.baselines | Where-Object { [string]$_.electronVersion -ceq $electronVersion })
+          if ($baselines.Count -ne 1) {
+            throw "Electron runtime baseline manifest must contain exactly one entry for Electron $electronVersion."
+          }
+          $baseline = $baselines[0]
+          $expectedBaselineProperties = @('electronVersion', 'artifactName', 'sha256')
+          $unexpectedBaselineProperties = Compare-Object -ReferenceObject $expectedBaselineProperties -DifferenceObject @($baseline.PSObject.Properties.Name)
+          if ($unexpectedBaselineProperties) {
+            throw "Electron $electronVersion runtime baseline has an unexpected schema."
+          }
+
+          $expectedArtifactName = "electron-v$electronVersion-win32-x64.zip"
+          $artifactName = [string]$baseline.artifactName
+          $pinnedHash = [string]$baseline.sha256
+          if ($artifactName -cne $expectedArtifactName) {
+            throw "Electron $electronVersion runtime baseline must name $expectedArtifactName."
+          }
+          if ($pinnedHash -cnotmatch '^[a-f0-9]{64}$') {
+            throw "Electron $electronVersion runtime baseline must contain a lowercase SHA-256 hash."
+          }
+
+          "electron_version=$electronVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact_name=$artifactName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "archive_sha256=$pinnedHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "Validated committed Electron runtime baseline for $artifactName (SHA-256 $pinnedHash)." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Download and verify the official Electron runtime baseline
+        shell: pwsh
+        env:
+          ELECTRON_RUNTIME_VERSION: ${{ steps.electron_runtime_baseline.outputs.electron_version }}
+          ELECTRON_RUNTIME_ARTIFACT: ${{ steps.electron_runtime_baseline.outputs.artifact_name }}
+          ELECTRON_RUNTIME_SHA256: ${{ steps.electron_runtime_baseline.outputs.archive_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $electronVersion = [string]$env:ELECTRON_RUNTIME_VERSION
+          $artifactName = [string]$env:ELECTRON_RUNTIME_ARTIFACT
+          $pinnedHash = [string]$env:ELECTRON_RUNTIME_SHA256
+          if ($electronVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'Validated Electron runtime version is unavailable or invalid.'
+          }
+          if ($artifactName -cne "electron-v$electronVersion-win32-x64.zip") {
+            throw 'Validated Electron runtime artifact name is unavailable or invalid.'
+          }
+          if ($pinnedHash -cnotmatch '^[a-f0-9]{64}$') {
+            throw 'Validated Electron runtime SHA-256 pin is unavailable or invalid.'
+          }
+          $releaseBase = "https://github.com/electron/electron/releases/download/v$electronVersion"
+          $checksums = [System.Text.Encoding]::UTF8.GetString((Invoke-WebRequest -UseBasicParsing "$releaseBase/SHASUMS256.txt").Content)
+          $checksumLine = $checksums -split "`n" | Where-Object { $_ -match "^([a-f0-9]{64})\s+\*?$([regex]::Escape($artifactName))\s*$" }
+          if (@($checksumLine).Count -ne 1) { throw "Official SHA-256 entry for $artifactName was not found." }
+          $officialHash = ([regex]::Match($checksumLine.Trim(), '^[a-f0-9]{64}')).Value
+          if ($officialHash -cne $pinnedHash) {
+            throw "Official Electron SHA-256 for $artifactName does not match the committed runtime baseline pin."
+          }
+          $verificationDirectory = Join-Path $env:RUNNER_TEMP ("nexoip-electron-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $verificationDirectory | Out-Null
+          $runtimeArchive = Join-Path $verificationDirectory $artifactName
+          $referenceDirectory = Join-Path $verificationDirectory 'reference'
+          Invoke-WebRequest -UseBasicParsing "$releaseBase/$artifactName" -OutFile $runtimeArchive
+          $actualHash = (Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -cne $pinnedHash) { throw "Electron archive hash mismatch with the committed runtime baseline for $artifactName." }
+          Expand-Archive -LiteralPath $runtimeArchive -DestinationPath $referenceDirectory -Force
+          if (-not (Test-Path (Join-Path $referenceDirectory 'electron.exe') -PathType Leaf)) {
+            throw 'The verified Electron archive did not contain electron.exe at its expected root.'
+          }
+          "ELECTRON_REFERENCE_DIR=$referenceDirectory" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Verified Electron runtime archive $artifactName against the committed SHA-256 pin; the official checksum matched the same pin." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -111,34 +203,6 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-
-      - name: Download and verify the official Electron runtime baseline
-        shell: pwsh
-        run: |
-          $package = Get-Content package.json -Raw | ConvertFrom-Json
-          $electronVersion = [string]$package.devDependencies.electron
-          if ($electronVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-            throw "Electron runtime version '$electronVersion' must be exact SemVer."
-          }
-          $artifactName = "electron-v$electronVersion-win32-x64.zip"
-          $releaseBase = "https://github.com/electron/electron/releases/download/v$electronVersion"
-          $checksums = [System.Text.Encoding]::UTF8.GetString((Invoke-WebRequest -UseBasicParsing "$releaseBase/SHASUMS256.txt").Content)
-          $checksumLine = $checksums -split "`n" | Where-Object { $_ -match "^([a-f0-9]{64})\s+\*?$([regex]::Escape($artifactName))\s*$" }
-          if (@($checksumLine).Count -ne 1) { throw "Official SHA-256 entry for $artifactName was not found." }
-          $expectedHash = ([regex]::Match($checksumLine.Trim(), '^[a-f0-9]{64}')).Value
-          $verificationDirectory = Join-Path $env:RUNNER_TEMP ("nexoip-electron-" + [guid]::NewGuid().ToString('N'))
-          New-Item -ItemType Directory -Path $verificationDirectory | Out-Null
-          $runtimeArchive = Join-Path $verificationDirectory $artifactName
-          $referenceDirectory = Join-Path $verificationDirectory 'reference'
-          Invoke-WebRequest -UseBasicParsing "$releaseBase/$artifactName" -OutFile $runtimeArchive
-          $actualHash = (Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -cne $expectedHash) { throw "Official Electron archive hash mismatch for $artifactName." }
-          Expand-Archive -LiteralPath $runtimeArchive -DestinationPath $referenceDirectory -Force
-          if (-not (Test-Path (Join-Path $referenceDirectory 'electron.exe') -PathType Leaf)) {
-            throw 'The verified Electron archive did not contain electron.exe at its expected root.'
-          }
-          "ELECTRON_REFERENCE_DIR=$referenceDirectory" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "Verified official Electron runtime archive $artifactName with SHA-256 $actualHash." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Smoke test packaged application
         run: npm run test:smoke:run

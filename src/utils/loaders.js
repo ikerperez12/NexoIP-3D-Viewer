@@ -51,7 +51,10 @@ export class ModelBudgetError extends Error {
 
 const SOURCE_BUDGET_QUERY_PARAMETER = '__nexoip_source_budget';
 const SOURCE_BUDGET_TRACKED_PROTOCOLS = new Set(['nexoip:', 'http:', 'https:']);
-const IMAGE_SIDECAR_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+// glTF and legacy loaders select handlers before they can inspect response
+// MIME types. Cover every non-inline image URI, then sniff its bounded header
+// before decoding. Inline data/blob images are preflighted from their bytes.
+const IMAGE_SIDECAR_PATTERN = /^(?!data:|blob:).+$/i;
 const IMAGE_MIME_TYPES = Object.freeze({
   avif: 'image/avif',
   bmp: 'image/bmp',
@@ -62,6 +65,7 @@ const IMAGE_MIME_TYPES = Object.freeze({
   svg: 'image/svg+xml',
   webp: 'image/webp'
 });
+const MAX_TEXTURE_HEADER_BYTES = 1024 * 1024;
 
 const activeSourceBudgets = new Map();
 let sourceBudgetFetchDispatcher = null;
@@ -174,8 +178,10 @@ class ModelSourceBudget {
   constructor(budget, parentSignal) {
     this.maxSourceBytes = normalizeBudgetLimit(budget?.maxSourceBytes, DEFAULT_MODEL_BUDGET.maxSourceBytes);
     this.maxRequests = normalizeBudgetLimit(budget?.maxRequests, DEFAULT_MODEL_BUDGET.maxRequests);
+    this.maxTexturePixels = normalizeBudgetLimit(budget?.maxTexturePixels, DEFAULT_MODEL_BUDGET.maxTexturePixels);
     this.sourceBytes = 0;
     this.requests = 0;
+    this.texturePixels = 0;
     this.failure = null;
     this.parentSignal = parentSignal;
     this.abortController = new AbortController();
@@ -221,6 +227,26 @@ class ModelSourceBudget {
     if (!Number.isSafeInteger(byteLength) || byteLength < 0) return;
     this.assertTransferCanFit(byteLength);
     this.sourceBytes += byteLength;
+  }
+
+  reserveTexturePixels(width, height) {
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+      throw this.rejectTexturePayload();
+    }
+    const pixels = width * height;
+    if (!Number.isSafeInteger(pixels)) throw this.rejectTexturePayload();
+    const actual = this.texturePixels + pixels;
+    if (!Number.isSafeInteger(actual) || actual > this.maxTexturePixels) {
+      throw this.recordFailure(new ModelBudgetError('texturePixels', actual, this.maxTexturePixels));
+    }
+    this.texturePixels = actual;
+  }
+
+  rejectTexturePayload() {
+    const actual = this.maxTexturePixels < Number.MAX_SAFE_INTEGER
+      ? this.maxTexturePixels + 1
+      : Number.MAX_SAFE_INTEGER;
+    return this.recordFailure(new ModelBudgetError('texturePixels', actual, this.maxTexturePixels));
   }
 
   tag(url) {
@@ -510,15 +536,322 @@ function imageMimeTypeForUrl(url) {
   try {
     const pathName = new URL(url).pathname;
     const extension = pathName.slice(pathName.lastIndexOf('.') + 1).toLowerCase();
-    return IMAGE_MIME_TYPES[extension] || 'application/octet-stream';
+    return normalizeImageMimeType(IMAGE_MIME_TYPES[extension]);
   } catch {
-    return 'application/octet-stream';
+    return '';
   }
 }
 
-async function decodeBudgetedTextureImage(buffer, url, signal) {
+function normalizeImageMimeType(value) {
+  const mimeType = String(value || '').split(';', 1)[0].trim().toLowerCase();
+  if (mimeType === 'image/jpg') return 'image/jpeg';
+  return new Set([
+    'image/avif',
+    'image/bmp',
+    'image/gif',
+    'image/jpeg',
+    'image/ktx2',
+    'image/png',
+    'image/svg+xml',
+    'image/webp'
+  ]).has(mimeType) ? mimeType : '';
+}
+
+function texturePayloadFailure(sourceBudget) {
+  throw sourceBudget.rejectTexturePayload();
+}
+
+function hasBytes(bytes, offset, length) {
+  return Number.isSafeInteger(offset)
+    && Number.isSafeInteger(length)
+    && offset >= 0
+    && length >= 0
+    && offset <= bytes.byteLength - length;
+}
+
+function asciiBytesEqual(bytes, offset, value) {
+  if (!hasBytes(bytes, offset, value.length)) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (bytes[offset + index] !== value.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+function imageDimensionValue(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function parsePngDimensions(bytes) {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!hasBytes(bytes, 0, 24) || !signature.every((value, index) => bytes[index] === value)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(8) !== 13 || !asciiBytesEqual(bytes, 12, 'IHDR')) return null;
+  const width = imageDimensionValue(view.getUint32(16));
+  const height = imageDimensionValue(view.getUint32(20));
+  return width && height ? { mimeType: 'image/png', width, height } : null;
+}
+
+function parseJpegDimensions(bytes) {
+  if (!hasBytes(bytes, 0, 2) || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 2;
+  while (offset < bytes.byteLength) {
+    while (offset < bytes.byteLength && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.byteLength) return null;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (!hasBytes(bytes, offset, 2)) return null;
+    const length = view.getUint16(offset);
+    if (length < 2 || !hasBytes(bytes, offset, length)) return null;
+    const isStartOfFrame = (marker >= 0xc0 && marker <= 0xc3)
+      || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb)
+      || (marker >= 0xcd && marker <= 0xcf);
+    if (isStartOfFrame) {
+      if (length < 8) return null;
+      const height = imageDimensionValue(view.getUint16(offset + 3));
+      const width = imageDimensionValue(view.getUint16(offset + 5));
+      return width && height ? { mimeType: 'image/jpeg', width, height } : null;
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function parseGifDimensions(bytes) {
+  if ((!asciiBytesEqual(bytes, 0, 'GIF87a') && !asciiBytesEqual(bytes, 0, 'GIF89a')) || !hasBytes(bytes, 6, 4)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = imageDimensionValue(view.getUint16(6, true));
+  const height = imageDimensionValue(view.getUint16(8, true));
+  return width && height ? { mimeType: 'image/gif', width, height } : null;
+}
+
+function parseBmpDimensions(bytes) {
+  if (!asciiBytesEqual(bytes, 0, 'BM') || !hasBytes(bytes, 14, 4)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const dibSize = view.getUint32(14, true);
+  if (dibSize === 12 && hasBytes(bytes, 18, 4)) {
+    const width = imageDimensionValue(view.getUint16(18, true));
+    const height = imageDimensionValue(view.getUint16(20, true));
+    return width && height ? { mimeType: 'image/bmp', width, height } : null;
+  }
+  if (dibSize < 40 || !hasBytes(bytes, 18, 8)) return null;
+  const width = imageDimensionValue(Math.abs(view.getInt32(18, true)));
+  const height = imageDimensionValue(Math.abs(view.getInt32(22, true)));
+  return width && height ? { mimeType: 'image/bmp', width, height } : null;
+}
+
+function parseWebpDimensions(bytes) {
+  if (!asciiBytesEqual(bytes, 0, 'RIFF') || !asciiBytesEqual(bytes, 8, 'WEBP')) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 12;
+  while (hasBytes(bytes, offset, 8)) {
+    const chunkLength = view.getUint32(offset + 4, true);
+    const chunkOffset = offset + 8;
+    if (!hasBytes(bytes, chunkOffset, chunkLength)) return null;
+    if (asciiBytesEqual(bytes, offset, 'VP8X') && chunkLength >= 10) {
+      const width = 1 + bytes[chunkOffset + 4] + (bytes[chunkOffset + 5] << 8) + (bytes[chunkOffset + 6] << 16);
+      const height = 1 + bytes[chunkOffset + 7] + (bytes[chunkOffset + 8] << 8) + (bytes[chunkOffset + 9] << 16);
+      return width && height ? { mimeType: 'image/webp', width, height } : null;
+    }
+    if (asciiBytesEqual(bytes, offset, 'VP8 ') && chunkLength >= 10
+      && bytes[chunkOffset + 3] === 0x9d && bytes[chunkOffset + 4] === 0x01 && bytes[chunkOffset + 5] === 0x2a) {
+      const width = view.getUint16(chunkOffset + 6, true) & 0x3fff;
+      const height = view.getUint16(chunkOffset + 8, true) & 0x3fff;
+      return width && height ? { mimeType: 'image/webp', width, height } : null;
+    }
+    if (asciiBytesEqual(bytes, offset, 'VP8L') && chunkLength >= 5 && bytes[chunkOffset] === 0x2f) {
+      const width = 1 + bytes[chunkOffset + 1] + ((bytes[chunkOffset + 2] & 0x3f) << 8);
+      const height = 1 + ((bytes[chunkOffset + 2] & 0xc0) >> 6) + (bytes[chunkOffset + 3] << 2) + ((bytes[chunkOffset + 4] & 0x0f) << 10);
+      return width && height ? { mimeType: 'image/webp', width, height } : null;
+    }
+    offset = chunkOffset + chunkLength + (chunkLength % 2);
+  }
+  return null;
+}
+
+function parseAvifDimensions(bytes) {
+  if (!asciiBytesEqual(bytes, 4, 'ftyp')) return null;
+  let hasAvifBrand = false;
+  for (let offset = 8; hasBytes(bytes, offset, 4); offset += 4) {
+    if (asciiBytesEqual(bytes, offset, 'avif') || asciiBytesEqual(bytes, offset, 'avis')) {
+      hasAvifBrand = true;
+      break;
+    }
+  }
+  if (!hasAvifBrand) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let offset = 4; hasBytes(bytes, offset, 16); offset += 1) {
+    if (!asciiBytesEqual(bytes, offset, 'ispe')) continue;
+    const boxStart = offset - 4;
+    const boxLength = view.getUint32(boxStart);
+    if (boxLength < 20 || !hasBytes(bytes, boxStart, boxLength)) return null;
+    const width = imageDimensionValue(view.getUint32(offset + 8));
+    const height = imageDimensionValue(view.getUint32(offset + 12));
+    return width && height ? { mimeType: 'image/avif', width, height } : null;
+  }
+  return null;
+}
+
+function parseKtx2Dimensions(bytes) {
+  const signature = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (!hasBytes(bytes, 0, 32) || !signature.every((value, index) => bytes[index] === value)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = imageDimensionValue(view.getUint32(20, true));
+  const height = imageDimensionValue(view.getUint32(24, true));
+  return width && height ? { mimeType: 'image/ktx2', width, height } : null;
+}
+
+function parseSvgDimensions(bytes) {
+  if (bytes.byteLength > 1024 * 1024) return null;
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  const openingTag = text.match(/<svg\b([^>]*)>/i);
+  if (!openingTag) return null;
+  const attributeValue = (name) => openingTag[1].match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i'))?.[1] || '';
+  const parseLength = (value) => {
+    const match = value.trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*(px)?$/i);
+    if (!match) return 0;
+    const parsed = Math.ceil(Number(match[1]));
+    return imageDimensionValue(parsed);
+  };
+  let width = parseLength(attributeValue('width'));
+  let height = parseLength(attributeValue('height'));
+  const viewBox = attributeValue('viewBox').trim().split(/[\s,]+/).map(Number);
+  if (viewBox.length === 4 && viewBox.every(Number.isFinite)) {
+    if (!width) width = imageDimensionValue(Math.ceil(viewBox[2]));
+    if (!height) height = imageDimensionValue(Math.ceil(viewBox[3]));
+  }
+  return width && height ? { mimeType: 'image/svg+xml', width, height } : null;
+}
+
+function inspectTextureImagePayload(buffer, expectedMimeType, sourceBudget) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const header = bytes.subarray(0, Math.min(bytes.byteLength, MAX_TEXTURE_HEADER_BYTES));
+  const actual = parsePngDimensions(header)
+    || parseJpegDimensions(header)
+    || parseGifDimensions(header)
+    || parseBmpDimensions(header)
+    || parseWebpDimensions(header)
+    || parseAvifDimensions(header)
+    || parseKtx2Dimensions(header)
+    || parseSvgDimensions(header);
+  const expected = normalizeImageMimeType(expectedMimeType);
+  if (!actual || (expectedMimeType && !expected) || (expected && actual.mimeType !== expected)) {
+    texturePayloadFailure(sourceBudget);
+  }
+  sourceBudget.reserveTexturePixels(actual.width, actual.height);
+  return actual;
+}
+
+function decodeDataUri(uri, sourceBudget, requireImageMimeType = true) {
+  const match = /^data:([^,]*),(.*)$/is.exec(uri);
+  if (!match) texturePayloadFailure(sourceBudget);
+  const metadata = match[1];
+  const payload = match[2];
+  const mimeType = normalizeImageMimeType(metadata.split(';', 1)[0]);
+  if (requireImageMimeType && !mimeType) texturePayloadFailure(sourceBudget);
+  try {
+    if (/(?:^|;)base64(?:;|$)/i.test(metadata)) {
+      const binary = globalThis.atob(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      return { bytes, mimeType };
+    }
+    return { bytes: new TextEncoder().encode(decodeURIComponent(payload)), mimeType };
+  } catch {
+    texturePayloadFailure(sourceBudget);
+  }
+}
+
+function parseGltfContainer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let jsonBytes = bytes;
+  let binaryChunk = null;
+  if (hasBytes(bytes, 0, 20) && view.getUint32(0, true) === 0x46546c67) {
+    if (view.getUint32(4, true) !== 2 || view.getUint32(8, true) > bytes.byteLength) return null;
+    let offset = 12;
+    jsonBytes = null;
+    while (hasBytes(bytes, offset, 8)) {
+      const chunkLength = view.getUint32(offset, true);
+      const chunkType = view.getUint32(offset + 4, true);
+      const chunkOffset = offset + 8;
+      if (!hasBytes(bytes, chunkOffset, chunkLength)) return null;
+      if (chunkType === 0x4e4f534a && !jsonBytes) jsonBytes = bytes.subarray(chunkOffset, chunkOffset + chunkLength);
+      if (chunkType === 0x004e4942 && !binaryChunk) binaryChunk = bytes.subarray(chunkOffset, chunkOffset + chunkLength);
+      offset = chunkOffset + chunkLength;
+    }
+    if (!jsonBytes) return null;
+  }
+  try {
+    const json = JSON.parse(new TextDecoder().decode(jsonBytes).replace(/\0+$/g, '').trim());
+    return json?.asset?.version === '2.0' ? { json, binaryChunk } : null;
+  } catch {
+    return null;
+  }
+}
+
+function inlineGltfBuffer(json, bufferIndex, binaryChunk, sourceBudget) {
+  const bufferDef = json.buffers?.[bufferIndex];
+  if (!bufferDef || typeof bufferDef !== 'object') return null;
+  if (bufferDef.uri === undefined) return bufferIndex === 0 ? binaryChunk : null;
+  if (typeof bufferDef.uri !== 'string' || !bufferDef.uri.startsWith('data:')) return null;
+  return decodeDataUri(bufferDef.uri, sourceBudget, false).bytes;
+}
+
+function gltfTextureSourceIndices(json) {
+  const sources = new Set();
+  const register = (value) => {
+    if (Number.isSafeInteger(value) && value >= 0) sources.add(value);
+  };
+  for (const texture of json.textures || []) {
+    register(texture?.source);
+    register(texture?.extensions?.KHR_texture_basisu?.source);
+    register(texture?.extensions?.EXT_texture_webp?.source);
+    register(texture?.extensions?.EXT_texture_avif?.source);
+  }
+  return sources;
+}
+
+function preflightEmbeddedGltfTextures(buffer, sourceBudget) {
+  const container = parseGltfContainer(buffer);
+  if (!container) return;
+  const { json, binaryChunk } = container;
+  for (const sourceIndex of gltfTextureSourceIndices(json)) {
+    const source = json.images?.[sourceIndex];
+    if (!source || typeof source !== 'object') continue;
+    if (typeof source.uri === 'string' && source.uri.startsWith('data:')) {
+      const dataUri = decodeDataUri(source.uri, sourceBudget);
+      inspectTextureImagePayload(dataUri.bytes, source.mimeType || dataUri.mimeType, sourceBudget);
+      continue;
+    }
+    if (!Number.isSafeInteger(source.bufferView) || source.bufferView < 0) continue;
+    const mimeType = normalizeImageMimeType(source.mimeType);
+    if (!mimeType) texturePayloadFailure(sourceBudget);
+    const view = json.bufferViews?.[source.bufferView];
+    if (!view || !Number.isSafeInteger(view.buffer) || view.buffer < 0
+      || !Number.isSafeInteger(view.byteLength) || view.byteLength <= 0) {
+      texturePayloadFailure(sourceBudget);
+    }
+    const binary = inlineGltfBuffer(json, view.buffer, binaryChunk, sourceBudget);
+    if (!binary) continue;
+    const byteOffset = view.byteOffset || 0;
+    if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || !hasBytes(binary, byteOffset, view.byteLength)) {
+      texturePayloadFailure(sourceBudget);
+    }
+    inspectTextureImagePayload(binary.subarray(byteOffset, byteOffset + view.byteLength), mimeType, sourceBudget);
+  }
+}
+
+async function decodeBudgetedTextureImage(buffer, mimeType, signal) {
   throwIfAborted(signal);
-  const blob = new Blob([buffer], { type: imageMimeTypeForUrl(url) });
+  const blob = new Blob([buffer], { type: mimeType });
   if (typeof globalThis.createImageBitmap === 'function') {
     try {
       return await raceWithAbort(globalThis.createImageBitmap(blob), signal, (image) => {
@@ -620,7 +953,8 @@ function createBudgetedTextureLoader(manager, sourceBudget, signal) {
           // The manager URL is already tagged. Leaving the budget argument out
           // here avoids charging the image request twice.
           const buffer = await fetchArrayBuffer(resolvedUrl, onProgress, signal);
-          image = await decodeBudgetedTextureImage(buffer, resolvedUrl, signal);
+          const descriptor = inspectTextureImagePayload(buffer, imageMimeTypeForUrl(resolvedUrl), sourceBudget);
+          image = await decodeBudgetedTextureImage(buffer, descriptor.mimeType, signal);
           throwIfAborted(signal);
           texture.image = image;
           texture.needsUpdate = true;
@@ -752,6 +1086,10 @@ async function loadGltf(url, onProgress, { renderer, signal, sourceBudget }) {
       async parse() {
         const buffer = await fetchArrayBuffer(url, onProgress, signal, sourceBudget);
         throwIfAborted(signal);
+        // GLTFLoader decodes data-URI and bufferView images through its own
+        // object-URL path, which bypasses the LoadingManager image handler.
+        // Reserve their decoded pixels before the parser can reach that path.
+        preflightEmbeddedGltfTextures(buffer, sourceBudget);
         return raceWithAbort(loader.parseAsync(buffer, baseUrl), sourceBudget.signal);
       },
       dispose: (gltf) => disposeModelResources(gltf?.scene),

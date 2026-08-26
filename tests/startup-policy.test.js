@@ -1,5 +1,9 @@
 import { expect, test } from 'vitest';
-import { findUnsafePackagedArguments, getPackagedSelfTestRequest } from '../electron/startup-policy.js';
+import {
+  findUnsafePackagedArguments,
+  getPackagedSelfTestRequest,
+  getUnsafePackagedArgumentNames,
+} from '../electron/startup-policy.js';
 import { getModelAssetMimeType } from '../electron/security.js';
 
 test('packaged startup policy rejects remote debugging, inspector and sandbox bypass switches', () => {
@@ -20,6 +24,16 @@ test('packaged startup policy rejects remote debugging, inspector and sandbox by
     '--js-flags=--inspect=9231',
   ]);
   expect(findUnsafePackagedArguments(['NexoIP 3D Viewer.exe', 'C:\\models\\chair.glb'])).toEqual([]);
+});
+
+test('packaged startup diagnostics retain only rejected switch names', () => {
+  expect(getUnsafePackagedArgumentNames([
+    'NexoIP 3D Viewer.exe',
+    '--load-extension=C:\\private\\untrusted-extension',
+    '--remote-debugging-address=127.0.0.1',
+    '--no-sandbox',
+  ])).toEqual(['load-extension', 'remote-debugging-address', 'no-sandbox']);
+  expect(getUnsafePackagedArgumentNames('not-an-array')).toEqual(['invalid-arguments']);
 });
 
 test('packaged startup policy rejects Chromium feature and field-trial overrides', () => {

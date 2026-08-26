@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { CATALOG_SEARCH_DEBOUNCE_MS, CATALOG_TREE_ROOT_PAGE_KEY } from '../utils/catalog-request.js';
 import { SUPPORTED_MODEL_EXTENSIONS } from '../utils/nexoip.js';
+import { panelContainsFocusedElement } from '../utils/panel-focus.js';
 
 const LIBRARY_TABS = [
   { id: 'tree', label: 'Árbol', icon: FolderTree },
@@ -50,6 +51,49 @@ export function scanProgressMessage(scanStatus, isScanning) {
   return `Escaneando: ${availability} en ${scannedDirectories} carpetas.`;
 }
 
+function scanAnnouncementMilestone(scanStatus) {
+  const availableModels = Math.max(0, Math.floor(scanStatus?.availableModels ?? scanStatus?.foundModels ?? scanStatus?.foundFiles ?? 0));
+  if (availableModels < 1) return 0;
+  if (availableModels < 10) return 1;
+  if (availableModels < 25) return 10;
+  return Math.floor(availableModels / 25) * 25;
+}
+
+export function getScanLiveAnnouncement(scanStatus, isScanning, previous = { status: 'idle', milestone: 0 }) {
+  const reportedStatus = scanStatus?.status;
+  const terminalStatus = ['completed', 'cancelled', 'failed'].includes(reportedStatus) ? reportedStatus : null;
+  const status = terminalStatus || (isScanning ? 'scanning' : 'idle');
+
+  if (status === 'scanning') {
+    if (previous.status !== 'scanning') {
+      return {
+        message: 'Escaneo iniciado. Los modelos precomprobados aparecerán en la biblioteca a medida que se encuentren.',
+        state: { status, milestone: 0 }
+      };
+    }
+
+    const milestone = scanAnnouncementMilestone(scanStatus);
+    if (milestone > (previous.milestone ?? 0)) {
+      const availableModels = scanStatus?.availableModels ?? scanStatus?.foundModels ?? scanStatus?.foundFiles ?? milestone;
+      return {
+        message: `${availableModels} ${availableModels === 1 ? 'modelo precomprobado ya está disponible' : 'modelos precomprobados ya están disponibles'} en la biblioteca.`,
+        state: { status, milestone }
+      };
+    }
+
+    return { message: '', state: { status, milestone: previous.milestone ?? 0 } };
+  }
+
+  if (terminalStatus && previous.status !== terminalStatus) {
+    return {
+      message: scanProgressMessage(scanStatus, false),
+      state: { status: terminalStatus, milestone: 0 }
+    };
+  }
+
+  return { message: '', state: { status, milestone: 0 } };
+}
+
 export function searchAnnouncement(query, extension, resultCount) {
   const hasQuery = Boolean(query.trim());
   const hasExtensionFilter = extension !== 'all';
@@ -92,7 +136,10 @@ export default function FileLibrarySidebar({
   const [query, setQuery] = useState(catalogFilters.query);
   const [selectedExt, setSelectedExt] = useState(catalogFilters.extension);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [scanLiveMessage, setScanLiveMessage] = useState('');
+  const panelRef = useRef(null);
   const tabRefs = useRef([]);
+  const scanAnnouncementStateRef = useRef({ status: 'idle', milestone: 0 });
   const instanceId = useId().replace(/:/g, '');
 
   const activePanelId = `library-${instanceId}-panel-${activeTab}`;
@@ -113,13 +160,21 @@ export default function FileLibrarySidebar({
     if (!isOpen) return undefined;
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (!panelContainsFocusedElement(panelRef.current, window.document.activeElement ?? event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       requestClose();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, requestClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const announcement = getScanLiveAnnouncement(scanStatus, isScanning, scanAnnouncementStateRef.current);
+    scanAnnouncementStateRef.current = announcement.state;
+    if (announcement.message) setScanLiveMessage(announcement.message);
+  }, [isOpen, isScanning, scanStatus]);
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'tree' || catalogState?.catalogRevision === null) return undefined;
@@ -182,7 +237,7 @@ export default function FileLibrarySidebar({
     && !rootTreePage.nextCursor);
 
   return (
-    <aside className="absolute bottom-4 left-4 top-32 z-20 flex w-[min(18rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Biblioteca de modelos locales">
+    <aside ref={panelRef} className="absolute bottom-4 left-4 top-32 z-20 flex w-[min(18rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Biblioteca de modelos locales">
       <div className="flex items-center justify-between border-b border-white/10 bg-black/40 p-4">
         <div className="flex items-center gap-2"><HardDrive size={18} aria-hidden="true" className="text-amber-300" /><div><h2 className="text-sm font-semibold text-gray-100">NexoIP 3D Viewer</h2><p className="font-mono text-[11px] text-emerald-200">Biblioteca local y árbol de carpetas</p></div></div>
         <button type="button" onClick={requestClose} className="min-h-8 min-w-8 rounded-lg p-2 text-gray-200 hover:bg-white/10 hover:text-white" aria-label="Cerrar biblioteca"><X size={18} aria-hidden="true" /></button>
@@ -203,7 +258,8 @@ export default function FileLibrarySidebar({
           {isScanning && <button type="button" onClick={onCancelScan} disabled={!bridgeAvailable || isCancellingScan} className="flex min-h-9 items-center justify-center gap-1 rounded-lg border border-red-400/60 bg-red-500/15 px-2 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-60" aria-describedby="scan-status scan-preflight-note"><X size={14} aria-hidden="true" /> {isCancellingScan ? 'Deteniendo…' : 'Detener'}</button>}
           <button type="button" onClick={refresh} disabled={!bridgeAvailable || isRefreshing} className="min-h-9 min-w-9 rounded-lg border border-white/20 p-2 text-gray-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60" aria-label="Actualizar biblioteca"><RefreshCw size={15} aria-hidden="true" className={isRefreshing ? 'animate-spin' : ''} /></button>
         </div>
-        <div id="scan-status" className="space-y-1 text-[11px]" role="status" aria-live="polite" aria-atomic="true"><div className="flex items-start justify-between gap-2 text-gray-200"><span>{statusMessage}</span><span className="shrink-0 font-mono font-bold text-emerald-200">{totalCached} modelos</span></div>{isScanning && <progress className="h-2 w-full accent-amber-400" aria-label="Escaneo local en curso" />}{!bridgeAvailable && <span className="block text-amber-100">Disponible solo desde la aplicación de escritorio.</span>}</div>
+        <div id="scan-status" className="space-y-1 text-[11px]"><div className="flex items-start justify-between gap-2 text-gray-200"><span>{statusMessage}</span><span className="shrink-0 font-mono font-bold text-emerald-200">{totalCached} modelos</span></div>{isScanning && <progress className="h-2 w-full accent-amber-400" aria-label="Escaneo local en curso" />}{!bridgeAvailable && <span className="block text-amber-100">Disponible solo desde la aplicación de escritorio.</span>}</div>
+        <div id={`scan-announcements-${instanceId}`} className="sr-only" role="status" aria-live="polite" aria-atomic="true">{scanLiveMessage}</div>
         <p id="scan-preflight-note" className="mt-1 text-[10px] leading-relaxed text-gray-300">La precomprobación descarta archivos compactos malformados o sin geometría; al abrirlos, el cargador valida el modelo completo y sus recursos.</p>
       </div>
 

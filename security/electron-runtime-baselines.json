@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "baselines": [
+    {
+      "electronVersion": "43.4.1",
+      "artifactName": "electron-v43.4.1-win32-x64.zip",
+      "sha256": "c2ef9a5f65472c34d14bd3e67b7d14e66b0c01f124aba45263d6a4232160e13a"
+    }
+  ]
+}

@@ -37,6 +37,8 @@ describe('server-rendered accessibility contracts', () => {
     expect(markup).toContain('aria-controls="library-');
     expect(markup).toContain('aria-labelledby="library-');
     expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain('id="scan-status"');
+    expect(markup).toMatch(/id="scan-announcements-[^"]+"[^>]*role="status"/);
     expect(markup).toContain('Detener');
     expect(markup).toContain('<progress');
   });

@@ -75,6 +75,11 @@ export function findUnsafePackagedArguments(argumentsList) {
   });
 }
 
+export function getUnsafePackagedArgumentNames(argumentsList) {
+  return [...new Set(findUnsafePackagedArguments(argumentsList)
+    .map((argument) => getSwitchName(argument) || 'invalid-arguments'))];
+}
+
 function findSingleSwitchValue(argumentsList, switchName) {
   const prefix = `--${switchName}=`;
   const values = argumentsList

@@ -23,8 +23,14 @@ release/
 *.key
 *.p12
 *.pfx
+*.pvk
+*.snk
+*.jks
+*.keystore
+*.kdbx
 *.cer
 *.crt
+.secrets/
 *.db
 *.sqlite
 *.sqlite-*

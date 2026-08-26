@@ -3,6 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect, test, vi } from 'vitest';
 import { FileScanner } from '../electron/file-scanner.js';
+import {
+  MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
+  MAX_MODEL_PREFLIGHT_BYTES,
+} from '../electron/model-preflight.js';
 
 const MINIMAL_GLTF_DOCUMENT = {
   asset: { version: '2.0' },
@@ -221,6 +225,80 @@ test('scanner requires a GLB JSON chunk and compact renderable glTF 2.0 metadata
     expect(listAllModels(scanner).map((model) => model.name)).toEqual(['minimal.glb']);
     expect(scanner.getStatus()).toMatchObject({ invalidModels: 1, foundModels: 1 });
     await expect(scanner.registerDroppedPath(headerOnlyPath)).rejects.toThrow('Invalid dropped file');
+  });
+});
+
+test('scanner rejects malformed oversized glTF candidates without reading a full file', async () => {
+  await withTemporaryLibrary(async (directory) => {
+    const malformedPath = path.join(directory, 'malformed-large.gltf');
+    const validPath = path.join(directory, 'valid-large.gltf');
+    const whitespacePrefix = Buffer.alloc(MAX_MODEL_PREFLIGHT_BYTES, 0x20);
+    const validDocument = Buffer.from(JSON.stringify(MINIMAL_GLTF_DOCUMENT));
+    const preflightReads = [];
+    await Promise.all([
+      fs.promises.writeFile(malformedPath, Buffer.concat([
+        Buffer.from('{'),
+        whitespacePrefix,
+        Buffer.from('x'),
+      ])),
+      fs.promises.writeFile(validPath, Buffer.concat([
+        Buffer.from('{'),
+        whitespacePrefix,
+        validDocument.subarray(1),
+      ])),
+    ]);
+
+    const realOpenFile = fs.promises.open;
+    const openFileSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (filePath, mode) => {
+      const fileHandle = await realOpenFile(filePath, mode);
+      return {
+        stat: (...args) => fileHandle.stat(...args),
+        read: (...args) => {
+          preflightReads.push({
+            filePath,
+            length: args[2],
+            position: args[3],
+          });
+          return fileHandle.read(...args);
+        },
+        close: () => fileHandle.close(),
+      };
+    });
+    try {
+      const scanner = new FileScanner();
+      await expect(scanner.scanDirectories([directory])).resolves.toEqual({
+        status: 'completed',
+        count: 1,
+        truncated: false,
+      });
+      expect(listAllModels(scanner).map((model) => model.name)).toEqual(['valid-large.gltf']);
+      expect(scanner.getStatus()).toMatchObject({
+        foundModels: 1,
+        availableModels: 1,
+        skippedEntries: 1,
+        invalidModels: 1,
+      });
+      const malformedReads = preflightReads.filter(({ filePath }) => filePath === malformedPath);
+      const malformedSize = (await fs.promises.stat(malformedPath)).size;
+      expect(malformedReads).toEqual([
+        {
+          filePath: malformedPath,
+          length: MAX_MODEL_PREFLIGHT_BYTES - MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
+          position: 0,
+        },
+        {
+          filePath: malformedPath,
+          length: MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
+          position: malformedSize - MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
+        },
+      ]);
+      expect(malformedReads[0].length + malformedReads[1].length).toBe(MAX_MODEL_PREFLIGHT_BYTES);
+      expect(malformedReads[0].position + malformedReads[0].length)
+        .toBeLessThan(malformedReads[1].position);
+      await expect(scanner.registerDroppedPath(malformedPath)).rejects.toThrow('Invalid dropped file');
+    } finally {
+      openFileSpy.mockRestore();
+    }
   });
 });
 

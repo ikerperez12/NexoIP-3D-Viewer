@@ -1,6 +1,9 @@
 import path from 'node:path';
 
 export const MAX_MODEL_PREFLIGHT_BYTES = 256 * 1024;
+// Oversized textual glTF files receive a bounded sample from each end. The
+// scanner keeps the total sampled bytes at the same 256 KiB budget.
+export const MAX_GLTF_PREFLIGHT_SUFFIX_BYTES = 4 * 1024;
 
 const GLB_MAGIC = 0x46546C67;
 const GLB_VERSION = 2;
@@ -94,15 +97,23 @@ function isStructurallyValidGlb(bytes, size) {
   return chunkOffset === size;
 }
 
-function isStructurallyValidGltf(bytes, size) {
+function isStructurallyValidGltf(bytes, size, suffixBytes = Buffer.alloc(0)) {
   // JSON metadata can legitimately be large because data URIs may be embedded.
-  // Keep the scan bounded. Compact documents must describe renderable geometry;
-  // oversized candidates retain a prefix-only preflight and are fully parsed
-  // by the renderer when opened.
+  // Keep the scan bounded. Compact documents must describe renderable geometry.
+  // Oversized documents retain a bounded prefix-and-suffix preflight and are
+  // fully parsed by the renderer when opened.
   if (size > bytes.length) {
     const text = toText(bytes);
+    const suffix = toText(suffixBytes);
     const trimmed = text.trimStart();
-    return trimmed.startsWith('{') && !trimmed.includes('\0');
+    // A glTF JSON document is a top-level object. Checking its bounded tail
+    // prevents a whitespace-padded, malformed prefix from being published as
+    // a prechecked model without reading the complete file.
+    return trimmed.startsWith('{')
+      && !trimmed.includes('\0')
+      && suffix.length > 0
+      && !suffix.includes('\0')
+      && suffix.trimEnd().endsWith('}');
   }
   return isSemanticallyValidCompactGltf(bytes);
 }
@@ -181,12 +192,12 @@ function isStructurallyValidStl(bytes, size) {
 // This deliberately verifies bounded, format-specific structure and rejects
 // compact geometry-free files before publication. The renderer loader remains
 // responsible for full parsing, dependency resolution, and fidelity checks.
-export function isPreflightValidModel(filePath, bytes, size) {
+export function isPreflightValidModel(filePath, bytes, size, suffixBytes) {
   switch (path.extname(filePath).toLowerCase()) {
     case '.glb':
       return isStructurallyValidGlb(bytes, size);
     case '.gltf':
-      return isStructurallyValidGltf(bytes, size);
+      return isStructurallyValidGltf(bytes, size, suffixBytes);
     case '.obj':
       return isStructurallyValidObj(bytes, size);
     case '.ply':

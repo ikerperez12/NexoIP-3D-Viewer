@@ -20,7 +20,11 @@ import {
   isOpaqueId,
   normalizeDevRendererUrl,
 } from './security.js';
-import { findUnsafePackagedArguments, getPackagedSelfTestRequest } from './startup-policy.js';
+import {
+  findUnsafePackagedArguments,
+  getPackagedSelfTestRequest,
+  getUnsafePackagedArgumentNames,
+} from './startup-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +52,7 @@ let catalogChangeTimer = null;
 const startupArguments = process.argv.slice(app.isPackaged ? 1 : 2);
 let pendingStartupPath = startupArguments.find((argument) => path.isAbsolute(argument)) || null;
 const unsafeStartupArguments = app.isPackaged ? findUnsafePackagedArguments(startupArguments) : [];
+const unsafeStartupArgumentNames = app.isPackaged ? getUnsafePackagedArgumentNames(startupArguments) : [];
 const packagedSelfTestRequest = app.isPackaged ? getPackagedSelfTestRequest(startupArguments) : null;
 const startupIsAllowed = unsafeStartupArguments.length === 0 && (!packagedSelfTestRequest || packagedSelfTestRequest.valid);
 
@@ -75,8 +80,8 @@ function queueCatalogChange(change) {
 scanner.onCatalogChange(queueCatalogChange);
 
 if (!startupIsAllowed) {
-  const reason = unsafeStartupArguments.length > 0
-    ? `Unsafe packaged startup argument rejected: ${unsafeStartupArguments.join(', ')}`
+  const reason = unsafeStartupArgumentNames.length > 0
+    ? `Unsafe packaged startup switch rejected: ${unsafeStartupArgumentNames.join(', ')}`
     : packagedSelfTestRequest.reason;
   process.stderr.write(`NexoIP 3D Viewer refused to start. ${reason}\n`);
   app.exit(78);
@@ -332,7 +337,10 @@ if (startupIsAllowed) {
         return;
       }
     } catch (error) {
-      process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${error instanceof Error ? error.message : String(error)}\n`);
+      const reason = app.isPackaged
+        ? 'Startup initialization failed.'
+        : (error instanceof Error ? error.message : String(error));
+      process.stderr.write(`NexoIP 3D Viewer failed to start safely: ${reason}\n`);
       app.exit(1);
     }
   });

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getScanLiveAnnouncement,
   nextRovingTabIndex,
   scanProgressMessage,
   searchAnnouncement
 } from '../src/components/FileLibrarySidebar.jsx';
+import { panelContainsFocusedElement } from '../src/utils/panel-focus.js';
 
 describe('file library accessibility helpers', () => {
   it('implements cyclic APG tab navigation including Home and End', () => {
@@ -34,5 +36,41 @@ describe('file library accessibility helpers', () => {
       .toContain('1 archivo no supera la precomprobación de formato y geometría');
     expect(scanProgressMessage({ status: 'cancelled', foundModels: 2 }, false))
       .toContain('Se conservan los modelos');
+  });
+
+  it('announces scan lifecycle events and useful discovery milestones without repeating every candidate', () => {
+    let state = { status: 'idle', milestone: 0 };
+    let update = getScanLiveAnnouncement({ status: 'scanning', availableModels: 0 }, true, state);
+    expect(update.message).toContain('Escaneo iniciado');
+    state = update.state;
+
+    update = getScanLiveAnnouncement({ status: 'scanning', availableModels: 1 }, true, state);
+    expect(update.message).toContain('1 modelo precomprobado');
+    state = update.state;
+
+    update = getScanLiveAnnouncement({ status: 'scanning', availableModels: 9 }, true, state);
+    expect(update.message).toBe('');
+    state = update.state;
+
+    update = getScanLiveAnnouncement({ status: 'scanning', availableModels: 10 }, true, state);
+    expect(update.message).toContain('10 modelos precomprobados');
+    state = update.state;
+
+    update = getScanLiveAnnouncement({ status: 'scanning', availableModels: 24 }, true, state);
+    expect(update.message).toBe('');
+    state = update.state;
+
+    update = getScanLiveAnnouncement({ status: 'completed', foundModels: 26 }, false, state);
+    expect(update.message).toBe('Escaneo completo: 26 modelos compatibles indexados.');
+  });
+
+  it('identifies the panel that actually contains focus before Escape can close it', () => {
+    const focusedInside = {};
+    const focusedOutside = {};
+    const panel = { contains: (element) => element === focusedInside };
+
+    expect(panelContainsFocusedElement(panel, focusedInside)).toBe(true);
+    expect(panelContainsFocusedElement(panel, focusedOutside)).toBe(false);
+    expect(panelContainsFocusedElement(null, focusedInside)).toBe(false);
   });
 });

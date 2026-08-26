@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   X, Info, Eye, EyeOff, Layers, Box, ChevronDown, ChevronRight, Cpu, Palette, Download, Sparkles, Folder
 } from 'lucide-react';
+import { panelContainsFocusedElement } from '../utils/panel-focus.js';
 
 const INSPECTOR_TABS = [
   { id: 'stats', label: 'Métricas', icon: Cpu },
@@ -34,6 +35,7 @@ export default function ModelInspector({
   isExporting = false
 }) {
   const [activeTab, setActiveTab] = useState('stats');
+  const panelRef = useRef(null);
   const tabRefs = useRef([]);
   const instanceId = useId().replace(/:/g, '');
   const materials = stats?.materials || [];
@@ -48,12 +50,13 @@ export default function ModelInspector({
     if (!isOpen) return undefined;
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (!panelContainsFocusedElement(panelRef.current, window.document.activeElement ?? event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       requestClose();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, requestClose]);
 
   const handleTabKeyDown = (event, index) => {
@@ -67,7 +70,7 @@ export default function ModelInspector({
   if (!isOpen) return null;
 
   return (
-    <aside className="absolute bottom-4 right-4 top-32 z-20 flex w-[min(18rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel animate-fade-in pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Propiedades del modelo">
+    <aside ref={panelRef} className="absolute bottom-4 right-4 top-32 z-20 flex w-[min(18rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl shadow-2xl glass-panel animate-fade-in pointer-events-auto lg:w-80 2xl:top-20 2xl:w-96" aria-label="Propiedades del modelo">
       <div className="flex items-center justify-between border-b border-white/10 bg-black/40 p-4">
         <div className="flex items-center gap-2">
           <Info size={18} aria-hidden="true" className="text-purple-300" />

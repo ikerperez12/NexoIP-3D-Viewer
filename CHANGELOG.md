@@ -15,12 +15,18 @@ All notable changes are documented here. This project follows [Semantic Versioni
 - Added keyboard camera controls, APG tabs, focus restoration, scan/search announcements, compact-layout panel behaviour, and Windows forced-colour support.
 - Improved glTF with local Draco, Meshopt, and KTX2 runtimes; OBJ with multiple MTL libraries; STL colours; and PLY point-cloud handling.
 - GLB export now uses the clean imported object, includes hidden source nodes, and preserves animation clips.
+- Renderer-facing error messages now remove local paths, control characters, and oversized parser diagnostics while retaining actionable recovery context.
+- Oversized textual glTF candidates now receive bounded prefix-and-suffix structure checks before catalog publication; valid large models remain discoverable without a full scan-time parse.
+- Escape now closes the panel that owns focus, and progressive scan status is announced to assistive technology only at meaningful milestones.
 
 ### Security
 
 - Production binaries reject debugging and sandbox-bypass startup flags before creating a window.
 - Model assets are served from identity-verified open handles with safe MIME types and no check-then-reopen race.
+- Texture dimensions are validated and reserved before decoding external or embedded glTF images, preventing oversized image payloads from allocating past the model policy.
+- Packaged startup diagnostics retain rejected switch names rather than full argument values, and common signing-keystore formats are ignored by default.
 - Release publication now requires protected-main provenance, manual `production-signing` approval, timestamped publisher signatures, an Electron runtime inventory, SBOM, checksums, and attestations. Attestation uses a least-privilege job separate from publication, and a draft is downloaded and hash-verified before it can be made public.
+- The release workflow now pins the reviewed Electron Windows runtime archive SHA-256 in source and requires the official checksum to match that independent pin.
 - Stable publication rejects prerelease version strings and any tag that already owns a GitHub Release; high-risk runtime and toolchain upgrades are kept out of grouped Dependabot updates.
 
 ### Tests

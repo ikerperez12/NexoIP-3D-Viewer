@@ -110,6 +110,37 @@ function createStalledTextureGltf() {
   return JSON.stringify(gltf);
 }
 
+function createPngHeader(width, height) {
+  const bytes = new Uint8Array(33);
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  bytes.set([8, 6, 0, 0, 0], 24);
+  return bytes;
+}
+
+function createTexturedTriangleGltf(image) {
+  const gltf = JSON.parse(createTriangleGltf());
+  gltf.images = [image];
+  gltf.textures = [{ source: 0 }];
+  gltf.materials = [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }];
+  gltf.meshes[0].primitives[0].material = 0;
+  return gltf;
+}
+
+function createBufferViewTextureGltf(textureBytes) {
+  const gltf = createTexturedTriangleGltf({ bufferView: 2, mimeType: 'image/png' });
+  const binary = Buffer.from(gltf.buffers[0].uri.split(',', 2)[1], 'base64');
+  const merged = Buffer.concat([binary, Buffer.from(textureBytes)]);
+  gltf.buffers[0] = {
+    byteLength: merged.byteLength,
+    uri: `data:application/octet-stream;base64,${merged.toString('base64')}`
+  };
+  gltf.bufferViews.push({ buffer: 0, byteOffset: binary.byteLength, byteLength: textureBytes.byteLength });
+  return JSON.stringify(gltf);
+}
+
 function createExternalTriangleGltf() {
   return JSON.stringify({
     asset: { version: '2.0', generator: 'NexoIP external-buffer test fixture' },
@@ -255,6 +286,51 @@ describe('real model loader paths and resource budgets', () => {
     expect(result.metadata).toEqual({ scenes: 1, cameras: 0 });
     expect(result.exportObject).not.toBe(result.object);
     disposeModelResources(result.object);
+  });
+
+  it('rejects oversized PNG IHDR textures before image decoding for external, data-URI, and bufferView images', async () => {
+    const png = createPngHeader(4096, 4096);
+    const oversizedTextureModels = new Map([
+      ['external-oversized-texture.gltf', JSON.stringify(createTexturedTriangleGltf({ uri: 'oversized-image' }))],
+      ['data-uri-oversized-texture.gltf', JSON.stringify(createTexturedTriangleGltf({
+        uri: `data:image/png;base64,${Buffer.from(png).toString('base64')}`
+      }))],
+      ['buffer-view-oversized-texture.gltf', createBufferViewTextureGltf(png)]
+    ]);
+    const fetchBeforeTest = globalThis.fetch;
+    const hadCreateImageBitmap = Object.hasOwn(globalThis, 'createImageBitmap');
+    const createImageBitmapBeforeTest = globalThis.createImageBitmap;
+    const hadSelf = Object.hasOwn(globalThis, 'self');
+    const selfBeforeTest = globalThis.self;
+    const createImageBitmap = vi.fn(async () => ({ width: 1, height: 1, close() {} }));
+    globalThis.createImageBitmap = createImageBitmap;
+    globalThis.self = globalThis;
+    globalThis.fetch = vi.fn(async (url) => {
+      const pathName = pathNameForRequest(url);
+      const fileName = pathName.slice(pathName.lastIndexOf('/') + 1);
+      if (oversizedTextureModels.has(fileName)) {
+        return responseFrom(oversizedTextureModels.get(fileName), 'model/gltf+json');
+      }
+      if (pathName.endsWith('/oversized-image')) return responseFrom(png, 'image/png');
+      const requestUrl = url instanceof Request ? url.url : String(url);
+      if (requestUrl.startsWith('data:') || requestUrl.startsWith('blob:')) return originalFetch(url);
+      return new Response('not found', { status: 404 });
+    });
+
+    try {
+      for (const fileName of oversizedTextureModels.keys()) {
+        await expect(load3DModel(`nexoip://app/model/id/${fileName}`, fileName, undefined, {
+          budget: { ...DEFAULT_MODEL_BUDGET, maxTexturePixels: 1 }
+        })).rejects.toMatchObject({ code: 'MODEL_BUDGET_TEXTUREPIXELS' });
+      }
+      expect(createImageBitmap).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = fetchBeforeTest;
+      if (hadCreateImageBitmap) globalThis.createImageBitmap = createImageBitmapBeforeTest;
+      else delete globalThis.createImageBitmap;
+      if (hadSelf) globalThis.self = selfBeforeTest;
+      else delete globalThis.self;
+    }
   });
 
   it('resolves bundled Draco and Basis runtimes from the application root', () => {
@@ -436,7 +512,7 @@ describe('real model loader paths and resource budgets', () => {
         return Promise.resolve(responseFrom(createStalledTextureGltf(), 'model/gltf+json'));
       }
       if (pathName.endsWith('/stalled.png')) {
-        return Promise.resolve(responseFrom(new Uint8Array([137, 80, 78, 71]), 'image/png'));
+        return Promise.resolve(responseFrom(createPngHeader(1, 1), 'image/png'));
       }
       return Promise.resolve(new Response('not found', { status: 404 }));
     });

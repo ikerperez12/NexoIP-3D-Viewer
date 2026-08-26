@@ -30,6 +30,7 @@ import {
   responseStatus,
   validateDroppedFile
 } from './utils/nexoip.js';
+import { getUserErrorMessage } from './utils/error-messages.js';
 
 const Viewport3D = React.lazy(() => import('./components/Viewport3D.jsx'));
 
@@ -38,7 +39,7 @@ function isCompactViewport() {
 }
 
 function getErrorMessage(error, fallback) {
-  return error instanceof Error && error.message ? error.message : fallback;
+  return getUserErrorMessage(error, fallback);
 }
 
 function createInitialCatalogState() {

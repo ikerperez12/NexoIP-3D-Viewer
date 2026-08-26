@@ -214,8 +214,11 @@ async function assertDangerousArgumentsAreRejected(profileDirectory) {
       'Dangerous startup argument rejection',
     );
     assert(result.code === 78, `Unsafe startup argument was not rejected with exit code 78 (got ${result.code}).`);
-    assert(logs.join('').includes('Unsafe packaged startup argument rejected'),
-      `Unsafe startup rejection did not produce diagnostics: ${logs.join('')}`);
+    const diagnostics = logs.join('');
+    assert(diagnostics.includes('Unsafe packaged startup switch rejected: remote-debugging-port'),
+      `Unsafe startup rejection did not produce diagnostics: ${diagnostics}`);
+    assert(!diagnostics.includes('9222'),
+      `Unsafe startup rejection exposed the rejected switch value: ${diagnostics}`);
   } finally {
     stopProcessTree(child);
   }

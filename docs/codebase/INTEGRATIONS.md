@@ -11,7 +11,7 @@
 | Loopback Vite server | Development-only HTTP | Serve renderer during `npm run dev` | Exact `127.0.0.1:3000` allowlist | Low | `package.json:25`, `electron/security.js` |
 | npm registry | Build-time package source | Reproduce dependencies from lockfile | npm client / public packages | High | `package-lock.json`, `.github/workflows/ci.yml:31-32` |
 | GitHub Actions and Releases | Build-time CI/publication | Checks, CodeQL, artifacts, SBOM and provenance | Minimal `GITHUB_TOKEN`, OIDC for attestations | High | `.github/workflows/ci.yml`, `.github/workflows/release.yml` |
-| Official Electron GitHub release | Release-time baseline | Verify packaged Electron PE files against the official archive | Public HTTPS plus official SHA-256 file | High | `.github/workflows/release.yml:115-141` |
+| Official Electron GitHub release | Release-time baseline | Verify packaged Electron PE files against the official archive | Reviewed repository SHA-256 pin plus official-checksum concordance over public HTTPS | High | `security/electron-runtime-baselines.json`, `.github/workflows/release.yml` |
 
 The packaged application itself has no remote API, account, telemetry, analytics, update beacon or embedded HTTP server (`README.md:62-68`, `SECURITY.md:26-36`).
 

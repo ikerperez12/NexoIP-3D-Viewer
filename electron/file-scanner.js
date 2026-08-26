@@ -18,6 +18,7 @@ import {
 } from './security.js';
 import {
   isPreflightValidModel,
+  MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
   MAX_MODEL_PREFLIGHT_BYTES,
 } from './model-preflight.js';
 
@@ -561,12 +562,36 @@ export class FileScanner {
         return null;
       }
 
-      const bytesToRead = Math.min(openedStats.size, MAX_MODEL_PREFLIGHT_BYTES);
+      const isOversizedGltf = path.extname(realPath).toLowerCase() === '.gltf'
+        && openedStats.size > MAX_MODEL_PREFLIGHT_BYTES;
+      const bytesToRead = isOversizedGltf
+        ? MAX_MODEL_PREFLIGHT_BYTES - MAX_GLTF_PREFLIGHT_SUFFIX_BYTES
+        : Math.min(openedStats.size, MAX_MODEL_PREFLIGHT_BYTES);
       const bytes = Buffer.alloc(bytesToRead);
       const { bytesRead } = bytesToRead > 0
         ? await fileHandle.read(bytes, 0, bytesToRead, 0)
         : { bytesRead: 0 };
-      return isPreflightValidModel(realPath, bytes.subarray(0, bytesRead), openedStats.size);
+      if (bytesRead !== bytesToRead) return false;
+
+      let suffixBytes = Buffer.alloc(0);
+      if (isOversizedGltf) {
+        const suffixBytesToRead = Math.min(
+          MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
+          openedStats.size - bytesToRead,
+        );
+        const suffix = Buffer.alloc(suffixBytesToRead);
+        const suffixOffset = openedStats.size - suffixBytesToRead;
+        const { bytesRead: suffixBytesRead } = await fileHandle.read(
+          suffix,
+          0,
+          suffixBytesToRead,
+          suffixOffset,
+        );
+        if (suffixBytesRead !== suffixBytesToRead) return false;
+        suffixBytes = suffix;
+      }
+
+      return isPreflightValidModel(realPath, bytes, openedStats.size, suffixBytes);
     } catch {
       return null;
     } finally {
