@@ -247,6 +247,11 @@ test('scanner rejects malformed oversized glTF candidates without reading a full
         validDocument.subarray(1),
       ])),
     ]);
+    // FileScanner deliberately resolves model paths before opening them. On
+    // Windows, a temporary directory can have a short input spelling while
+    // realpath returns its canonical long spelling, so compare the spy with
+    // the same canonical path the scanner receives.
+    const canonicalMalformedPath = await fs.promises.realpath(malformedPath);
 
     const realOpenFile = fs.promises.open;
     const openFileSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (filePath, mode) => {
@@ -278,16 +283,16 @@ test('scanner rejects malformed oversized glTF candidates without reading a full
         skippedEntries: 1,
         invalidModels: 1,
       });
-      const malformedReads = preflightReads.filter(({ filePath }) => filePath === malformedPath);
+      const malformedReads = preflightReads.filter(({ filePath }) => filePath === canonicalMalformedPath);
       const malformedSize = (await fs.promises.stat(malformedPath)).size;
       expect(malformedReads).toEqual([
         {
-          filePath: malformedPath,
+          filePath: canonicalMalformedPath,
           length: MAX_MODEL_PREFLIGHT_BYTES - MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
           position: 0,
         },
         {
-          filePath: malformedPath,
+          filePath: canonicalMalformedPath,
           length: MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
           position: malformedSize - MAX_GLTF_PREFLIGHT_SUFFIX_BYTES,
         },
