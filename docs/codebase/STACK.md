@@ -28,7 +28,7 @@ All direct dependency versions are exact. The application sets `private: true` t
 | --- | --- | --- |
 | Vite 8.2.2 | Renderer development server and production build | `package.json:64`, `vite.config.mjs:1` |
 | Tailwind CSS 4.3.3 | Locally compiled renderer styles | `package.json:62`, `vite.config.mjs:3` |
-| ESLint 10.8.1 | JavaScript, React and Electron lint gate | `package.json:58`, `eslint.config.mjs:1` |
+| ESLint 10.9.0 | JavaScript, React and Electron lint gate | `package.json:58`, `eslint.config.mjs:1` |
 | Vitest 4.1.11 | Node-environment unit and integration tests | `package.json:66`, `vite.config.mjs:36` |
 | Playwright 1.62.1 | Packaged executable smoke wrapper | `package.json:51`, `playwright.config.mjs:1` |
 | electron-builder 26.15.3 | Windows directory, NSIS and portable packages | `package.json:56`, `package.json:72` |
