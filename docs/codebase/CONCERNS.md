@@ -5,6 +5,7 @@
 | Severity | Concern | Evidence | Impact | Suggested action |
 | --- | --- | --- | --- | --- |
 | High | Stable binaries cannot be published with verified publisher identity | `docs/PRODUCT_READINESS.md:31`, protected environment currently has no signing values | Users cannot authenticate the publisher; SmartScreen may block binaries | Select a trusted Authenticode provider, define owner/rotation, configure the protected environment and verify timestamps |
+| High | Production signing is intentionally gated on an independent reviewer | GitHub `production-signing` environment has `prevent_self_review=true` and `can_admins_bypass=false`; one reviewer is currently configured | A release cannot expose signing credentials until a second trusted reviewer is available; this prevents self-approval and administrator bypass | Add a trusted second reviewer and configure the certificate lifecycle before the first stable tag |
 | Medium | Packaged coverage is representative, not complete format-fidelity certification | `scripts/packaged-fixture-matrix.mjs`, `docs/PRODUCT_READINESS.md` | A valid but unusual scene/material/animation variant can still expose a loader gap | Add multi-scene, embedded-resource, decompression-heavy and richer export round trips |
 | High | Stable Windows/accessibility/GPU evidence remains external and incomplete | `docs/PRODUCT_READINESS.md:58`, `docs/PRODUCT_READINESS.md:73` | A green development host cannot substantiate broad stable-support claims | Record clean Windows 10/11, assistive-technology and constrained-GPU runs against exact artifacts |
 | Medium | Some decoded-resource limits remain necessarily after parser allocation | `src/utils/loaders.js`, `docs/PRODUCT_READINESS.md` | Texture dimensions are reserved before decode, but a compact decompression-heavy geometry payload may still cause a transient memory/CPU spike before rejection | Keep strict file caps; add parser time/memory stress fixtures and explore worker isolation per loader |
@@ -25,7 +26,7 @@
 | --- | --- | --- | --- | --- |
 | Complex untrusted 3D parsing | A03 / A06 | `src/utils/loaders.js:154-299`, `SECURITY.md:39` | Sandboxed renderer, local protocol, exact dependencies, file and decoded budgets | No dedicated parser process or malware-sandbox assurance |
 | Inline style permission in CSP | A05 | `index.html:6`, `electron/main.js:207` | Scripts remain `self` only; renderer is sandboxed and has no Node.js | `style-src 'unsafe-inline'` remains necessary for dynamic color/indent styles |
-| Signing secret lifecycle undefined | A02 / supply chain | `.github/workflows/release.yml:107-111`, `.github/workflows/release.yml:154` | Protected environment and exact subject/timestamp checks | Provider, rotation, revocation and recovery procedure are [TODO] |
+| Signing secret lifecycle undefined | A02 / supply chain | `.github/workflows/release.yml:107-111`, `.github/workflows/release.yml:154` | Protected environment now prevents self-review and administrator bypass; exact subject/timestamp checks remain fail-closed | Provider, rotation, revocation and recovery procedure are [TODO] |
 | No runtime telemetry | N/A, intentional privacy control | `README.md:62`, `SECURITY.md:26` | Local diagnostics and private reports | Security crash trends depend on voluntary reports |
 
 ## 4) Performance and Scaling Concerns

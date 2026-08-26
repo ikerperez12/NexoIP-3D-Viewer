@@ -31,6 +31,7 @@ Export remains alpha. GLB exports the clean imported clone rather than viewport 
 - The packaged Electron runtime archive matches a reviewed, repository-pinned SHA-256 baseline; the upstream checksum is a required independent consistency check, not the sole trust input.
 - Every NexoIP-owned executable is Authenticode-signed with the expected publisher identity and a trusted timestamp. Runtime PE signatures are inventoried and verified against an explicit vendor policy. `NotSigned` on a project-owned executable is a hard release failure.
 - Signing credentials are available only to a protected GitHub environment after an approved, protected tag is proven to reference the protected main branch.
+- The `production-signing` environment prevents self-review and administrator bypass; an independent reviewer must approve the job before signing credentials can be exposed.
 
 ### 2. Format correctness and resource safety
 
