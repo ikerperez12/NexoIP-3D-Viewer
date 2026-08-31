@@ -55,7 +55,7 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "4.3.3",
-    "@vitejs/plugin-react": "6.1.0",
+    "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
     "@xmldom/xmldom": "0.9.12",
     "concurrently": "10.0.5",
