@@ -55,7 +55,10 @@ export default function Viewport3D({
   onSnapshotResult,
   onModelError,
   onChooseAnotherModel,
-  nodeVisibilityToggle
+  nodeVisibilityToggle,
+  sidebarOpen = false,
+  inspectorOpen = false,
+  compactLayout = false
 }) {
   const containerRef = useRef(null);
   const sceneRef = useRef(null);
@@ -112,43 +115,52 @@ export default function Viewport3D({
     disposeLightGroup(group);
     if (!sceneRef.current) return;
 
-    sceneRef.current.background = new THREE.Color(preset === 'white' ? 0xf3f4f6 : 0x000000);
-    group.add(new THREE.HemisphereLight(0xffffff, 0x080808, 0.55));
+    const isWhite = preset === 'white';
+    sceneRef.current.background = new THREE.Color(isWhite ? 0xf3f4f6 : 0x000000);
 
-    const addSpotlight = ({ color, intensity, position, angle, penumbra, castShadow = false }) => {
-      const light = new THREE.SpotLight(color, intensity, 0, angle, penumbra, 0);
-      light.position.copy(position);
-      light.target.position.set(0, 0, 0);
-      light.castShadow = castShadow;
-      if (castShadow) {
-        light.shadow.mapSize.set(1024, 1024);
-        light.shadow.bias = -0.0005;
-      }
-      group.add(light, light.target);
-      return light;
+    const hemiSky = 0xffffff;
+    const hemiGround = isWhite ? 0xcbd5e1 : 0x181e29;
+    group.add(new THREE.HemisphereLight(hemiSky, hemiGround, isWhite ? 0.75 : 0.65));
+    group.add(new THREE.AmbientLight(0xffffff, isWhite ? 0.5 : 0.4));
+
+    const palettes = {
+      cyberpunk:  { key: 0xec4899, fill: 0x06b6d4, rim: 0xa855f7, exposure: 1.05 },
+      sunset:     { key: 0xffedd5, fill: 0xfacc15, rim: 0xf97316, exposure: 1.0 },
+      emerald:    { key: 0x34d399, fill: 0x06b6d4, rim: 0x10b981, exposure: 1.0 },
+      fireice:    { key: 0xffffff, fill: 0x38bdf8, rim: 0xef4444, exposure: 1.0 },
+      studio_pro: { key: 0xffffff, fill: 0xe0e7ff, rim: 0xffffff, exposure: 1.0 },
+      white:      { key: 0xffffff, fill: 0xe5e7eb, rim: 0xffffff, exposure: 0.95 }
     };
+    const p = palettes[preset] || palettes.studio_pro;
 
-    const palette = {
-      cyberpunk: [0xec4899, 0x06b6d4, 0xa855f7],
-      sunset: [0xf97316, 0xfacc15, 0xffedd5],
-      emerald: [0x10b981, 0x34d399, 0x06b6d4],
-      fireice: [0xef4444, 0x38bdf8, 0xffffff],
-      studio_pro: [0xffffff, 0xe0e7ff, 0xffffff],
-      white: [0xffffff, 0xe5e7eb, 0xffffff]
-    }[preset] || [0xffffff, 0xe0e7ff, 0xffffff];
+    const keyLight = new THREE.DirectionalLight(p.key, isWhite ? 1.3 : 1.5);
+    keyLight.position.set(12, 22, 16);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.bias = -0.0001;
+    keyLight.shadow.normalBias = 0.02;
+    keyLight.shadow.camera.near = 0.1;
+    keyLight.shadow.camera.far = 250;
+    const d = 20;
+    keyLight.shadow.camera.left = -d;
+    keyLight.shadow.camera.right = d;
+    keyLight.shadow.camera.top = d;
+    keyLight.shadow.camera.bottom = -d;
+    group.add(keyLight);
 
-    addSpotlight({
-      color: palette[0], intensity: 4.8, position: new THREE.Vector3(8, 16, 10),
-      angle: Math.PI / 3.5, penumbra: 0.45, castShadow: true
-    });
-    addSpotlight({
-      color: palette[1], intensity: 3.1, position: new THREE.Vector3(-9, 14, -8),
-      angle: Math.PI / 3, penumbra: 0.55
-    });
-    addSpotlight({
-      color: palette[2], intensity: 2.4, position: new THREE.Vector3(0, 20, 2),
-      angle: Math.PI / 4, penumbra: 0.35
-    });
+    const fillLight = new THREE.DirectionalLight(p.fill, isWhite ? 0.75 : 0.85);
+    fillLight.position.set(-16, 14, -10);
+    group.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(p.rim, isWhite ? 0.55 : 0.65);
+    rimLight.position.set(0, 16, -16);
+    group.add(rimLight);
+
+    if (rendererRef.current) {
+      rendererRef.current.toneMapping = THREE.ACESFilmicToneMapping;
+      rendererRef.current.toneMappingExposure = p.exposure;
+    }
+
     invalidateViewport();
   };
 
@@ -216,7 +228,7 @@ export default function Viewport3D({
     } else {
       const fov = THREE.MathUtils.degToRad(camera.fov);
       const distance = Math.max((maxDimension / 2) / Math.tan(fov / 2) * 1.8, 1);
-      camera.position.set(0, Math.max(size.y * 0.8, maxDimension * 0.25), distance);
+      camera.position.set(distance * 0.7, Math.max(size.y * 0.85, maxDimension * 0.55), distance * 0.95);
       cameraDistance = camera.position.distanceTo(controls.target);
     }
     camera.near = Math.max(maxDimension / 100_000, 0.001);
@@ -743,11 +755,35 @@ export default function Viewport3D({
     onChooseAnotherModel?.();
   };
 
+  const getSidebarOffset = () => {
+    if (!sidebarOpen || compactLayout) return 0;
+    if (typeof window === 'undefined') return 336;
+    if (window.innerWidth >= 1536) return 400;
+    if (window.innerWidth >= 1024) return 336;
+    return 304;
+  };
+
+  const getInspectorOffset = () => {
+    if (!inspectorOpen || compactLayout) return 0;
+    if (typeof window === 'undefined') return 336;
+    if (window.innerWidth >= 1536) return 400;
+    if (window.innerWidth >= 1024) return 336;
+    return 304;
+  };
+
+  const leftOffset = getSidebarOffset();
+  const rightOffset = getInspectorOffset();
+
   return (
-    <section className="relative h-full w-full bg-black" aria-label="Lienzo de modelo 3D" aria-busy={loading}>
+    <section className="relative h-full w-full overflow-hidden bg-black" aria-label="Lienzo de modelo 3D" aria-busy={loading}>
       <div
         ref={containerRef}
-        className="h-full w-full cursor-grab bg-black active:cursor-grabbing"
+        className="h-full cursor-grab bg-black active:cursor-grabbing transition-[margin,width] duration-200 ease-out"
+        style={{
+          marginLeft: `${leftOffset}px`,
+          marginRight: `${rightOffset}px`,
+          width: `calc(100% - ${leftOffset + rightOffset}px)`,
+        }}
         data-viewport-controls
         role="group"
         tabIndex="0"
@@ -772,7 +808,12 @@ export default function Viewport3D({
       <p id="viewport-keyboard-help" className="sr-only">Usa las flechas para desplazar la cámara y Mayús más flechas para orbitar. Utiliza los controles de cámara para acercar o alejar.</p>
 
       {loading && (
-        <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-6 text-center backdrop-blur-sm" role="status" aria-live="polite">
+        <div
+          className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-6 text-center backdrop-blur-sm transition-[left,right] duration-200 ease-out"
+          style={{ left: `${leftOffset}px`, right: `${rightOffset}px` }}
+          role="status"
+          aria-live="polite"
+        >
           <RefreshCw size={38} aria-hidden="true" className="animate-spin text-amber-400" />
           <p className="text-sm font-semibold text-gray-100">Cargando objeto 3D…</p>
           {loadProgress !== null && <progress className="h-2 w-56 accent-amber-400" value={loadProgress} max="1">{Math.round(loadProgress * 100)}%</progress>}
@@ -816,7 +857,10 @@ export default function Viewport3D({
       </dialog>
 
       {!currentFile && !loading && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center">
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center transition-[left,right] duration-200 ease-out"
+          style={{ left: `${leftOffset}px`, right: `${rightOffset}px` }}
+        >
           <div className="glass-panel max-w-md space-y-4 rounded-3xl border border-white/10 p-8 shadow-2xl">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-600/20 text-amber-300">
               <UploadCloud size={32} aria-hidden="true" />

@@ -138,7 +138,7 @@
     },
     "nsis": {
       "guid": "195abf82-5ba1-59b2-940c-d7f53e2f3f74",
-      "artifactName": "NexoIP-3D-Viewer-${version}-windows-${arch}-setup.${ext}",
+      "artifactName": "NexoIP 3D Viewer ${version} windows ${arch} setup.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -147,7 +147,7 @@
       "shortcutName": "NexoIP 3D Viewer"
     },
     "portable": {
-      "artifactName": "NexoIP-3D-Viewer-${version}-windows-${arch}-portable.${ext}",
+      "artifactName": "NexoIP 3D Viewer ${version} windows ${arch} portable.${ext}",
       "requestExecutionLevel": "user"
     }
   }
