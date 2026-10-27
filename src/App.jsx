@@ -719,6 +719,15 @@ export default function App() {
         element.isContentEditable || /^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(element.tagName)
       );
       const isViewportControl = element instanceof HTMLElement && Boolean(element.closest('[data-viewport-controls]'));
+      if (event.key === 'F11') {
+        event.preventDefault();
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen?.().catch(() => {});
+        } else {
+          document.exitFullscreen?.().catch(() => {});
+        }
+        return;
+      }
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isTextEntry || isViewportControl) return;
 
       if (event.key === 'ArrowRight') {
@@ -884,6 +893,9 @@ export default function App() {
             setSidebarOpen(true);
           }}
           nodeVisibilityToggle={nodeVisibilityToggle}
+          sidebarOpen={sidebarOpen}
+          inspectorOpen={inspectorOpen}
+          compactLayout={compactLayout}
         />
       </React.Suspense>
 

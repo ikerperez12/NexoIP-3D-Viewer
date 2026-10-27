@@ -1422,6 +1422,19 @@ export async function load3DModel(url, fileName = '', onProgress, options = {}) 
       child.castShadow = child.isMesh;
       child.receiveShadow = child.isMesh;
       if (!child.material) child.material = createDefaultPbrMaterial(0x9ca3af, child.name);
+
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        if (mat.map && mat.map.isTexture) {
+          mat.map.colorSpace = THREE.SRGBColorSpace;
+          mat.map.needsUpdate = true;
+        }
+        if (mat.emissiveMap && mat.emissiveMap.isTexture) {
+          mat.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+          mat.emissiveMap.needsUpdate = true;
+        }
+      }
     });
 
     assertModelWithinBudget(sceneGroup, animations, budget);

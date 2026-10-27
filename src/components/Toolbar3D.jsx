@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, BoxSelect, Camera, ChevronLeft,
-  ChevronRight, Grid, Info, Maximize2, Minus, MoveHorizontal, Plus, RotateCw,
+  ChevronRight, Grid, Info, Maximize, Maximize2, Minimize, Minus, MoveHorizontal, Plus, RotateCw,
   Shuffle
 } from 'lucide-react';
 
@@ -65,12 +65,29 @@ export default function Toolbar3D({
   inspectorTriggerRef
 }) {
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(typeof document !== 'undefined' && document.fullscreenElement));
   const cameraMenuTriggerRef = useRef(null);
   const cameraMenuId = `camera-controls-${useId().replace(/:/g, '')}`;
   const hasExactModelPosition = currentIndexKnown && Number.isSafeInteger(currentIndex) && currentIndex >= 0;
   const currentModelPosition = totalCount > 0
     ? (hasExactModelPosition ? `${currentIndex + 1} de ${totalCount}` : `posición no cargada de ${totalCount}`)
     : 'sin modelos en la biblioteca';
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
 
   const selectCameraPreset = (event) => {
     const preset = event.target.value;
@@ -181,6 +198,7 @@ export default function Toolbar3D({
           <button type="button" onClick={() => setShowAxes?.(!showAxes)} className={`flex min-h-8 min-w-8 items-center justify-center rounded-lg p-2 transition-all ${showAxes ? 'bg-emerald-500/30 text-emerald-200' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`} title="Mostrar u ocultar ejes 3D" aria-label="Mostrar u ocultar ejes 3D" aria-pressed={showAxes}><Box size={16} aria-hidden="true" /></button>
           <button type="button" onClick={() => setAutoRotate?.(!autoRotate)} className={`flex min-h-8 min-w-8 items-center justify-center rounded-lg p-2 transition-all ${autoRotate ? 'bg-rose-500/30 text-rose-200' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`} title="Activar o desactivar giro automático" aria-label="Activar o desactivar giro automático" aria-pressed={autoRotate}><RotateCw size={16} aria-hidden="true" className={autoRotate ? 'animate-spin' : ''} /></button>
           <button type="button" onClick={resetCamera} className="flex min-h-8 min-w-8 items-center justify-center rounded-lg p-2 text-gray-200 transition-all hover:bg-white/10 hover:text-white" title="Reencuadrar modelo" aria-label="Reencuadrar modelo"><Maximize2 size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={toggleFullscreen} className={`flex min-h-8 min-w-8 items-center justify-center rounded-lg p-2 transition-all ${isFullscreen ? 'bg-amber-500/30 text-amber-200' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`} title={isFullscreen ? 'Salir de pantalla completa (F11)' : 'Pantalla completa (F11)'} aria-label={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-pressed={isFullscreen}>{isFullscreen ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}</button>
           <button type="button" onClick={takeSnapshot} className="flex min-h-8 min-w-8 items-center justify-center rounded-lg p-2 text-cyan-200 transition-all hover:bg-cyan-500/20 hover:text-cyan-100" title="Guardar captura PNG" aria-label="Guardar captura PNG"><Camera size={16} aria-hidden="true" /></button>
         </div>
 
